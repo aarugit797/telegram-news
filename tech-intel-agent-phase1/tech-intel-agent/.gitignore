@@ -1,0 +1,19 @@
+.env
+
+
+__pycache__/
+*.pyc
+venv/
+.venv/
+*.egg-info/
+
+
+postgres_data/
+redis_data/
+
+
+.vscode/
+.idea/
+
+# OS
+.DS_Store
