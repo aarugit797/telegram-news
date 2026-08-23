@@ -53,7 +53,6 @@ class Signal(Base):
 
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    # 1024 matches Voyage AI's voyage-3 embedding output dimension.
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1024), nullable=True)
 
 
