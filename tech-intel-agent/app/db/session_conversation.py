@@ -1,15 +1,33 @@
-"""
-STUB - to be built.
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from contextlib import asynccontextmanager
 
-WHAT: Creates the async SQLAlchemy engine and session factory for
-the Conversation DB, connected through PgBouncer Pool 2.
+from app.core.config import settings
 
-WHY: Same reasoning as session_news.py, but for the separate
-Conversation DB - kept as its own engine/pool entirely.
+conversation_engine = create_async_engine(
+    settings.conversation_database_url,
+    pool_size=10,        
+    pool_pre_ping=True,
+    echo=False,
+)
 
-INPUT: A second database URL (Conversation DB connection string).
+ConversationSessionLocal = async_sessionmaker(
+    bind=conversation_engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
 
-OUTPUT: An async session factory for Conversation DB access.
 
-CONNECTS TO: Used by db/repository_conversation.py exclusively.
-"""
+@asynccontextmanager
+async def get_conversation_session():
+    """
+    Same pattern as get_news_session() above, but for the
+    Conversation DB. Used like:
+
+        async with get_conversation_session() as session:
+            ...do queries with session...
+    """
+    session = ConversationSessionLocal()
+    try:
+        yield session
+    finally:
+        await session.close()

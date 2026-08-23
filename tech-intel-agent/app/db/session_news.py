@@ -1,18 +1,37 @@
-"""
-STUB - to be built.
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from contextlib import asynccontextmanager
 
-WHAT: Creates the async SQLAlchemy engine and session factory for
-the News DB, connected through PgBouncer Pool 1.
+from app.core.config import settings
 
-WHY: Every component that touches the News DB needs a database
-session. This file centralizes how that session is created and
-configured (pool size, timeout) so it is consistent everywhere.
+news_engine = create_async_engine(
+    settings.database_url,
+    pool_size=20,        
+    pool_pre_ping=True,  
+    echo=False,          
+)
 
-INPUT: settings.database_url (News DB connection string) from config.py.
+NewsSessionLocal = async_sessionmaker(
+    bind=news_engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
 
-OUTPUT: An async session factory - other files call
-`async with get_news_session() as session:` to get a usable connection.
 
-CONNECTS TO: Used by db/repository_news.py exclusively - no other
-file should talk to the News DB session directly.
-"""
+@asynccontextmanager
+async def get_news_session():
+    """
+    The actual thing other files import and use, like:
+
+        async with get_news_session() as session:
+            ...do queries with session...
+
+    This creates a fresh session, hands it to whoever is using it,
+    and guarantees it gets closed afterward even if an error happens
+    partway through - the `try/finally` below is what makes that
+    guarantee, regardless of how the `with` block exits.
+    """
+    session = NewsSessionLocal()
+    try:
+        yield session
+    finally:
+        await session.close()
