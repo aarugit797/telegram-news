@@ -1,20 +1,32 @@
-"""
-STUB - to be built.
+import voyageai
+from typing import Literal
 
-WHAT: Generates a vector embedding for a piece of text using Voyage AI.
+from app.core.config import settings
 
-WHY: Two different moments in the system need embeddings generated
-the exact same way - when a signal is first written to the News DB
-(so it can be searched later), and when a user asks a question (so
-we can search for similar signals). Using one shared function
-guarantees both use the identical embedding model and settings -
-critical, because comparing vectors from two different models or
-configs gives meaningless similarity scores.
 
-INPUT: A string of text (signal summary, or user's question).
+_client = voyageai.AsyncClient(api_key=settings.voyage_api_key)
 
-OUTPUT: A vector (list of floats) of fixed dimension.
 
-CONNECTS TO: Called by filters/content_fetcher.py (when writing a
-signal) and by responder/tools/news_db_tool.py (when searching).
-"""
+EMBEDDING_MODEL = "voyage-4"
+
+
+async def get_embedding(text: str,input_type: Literal["document", "query"] ) -> list[float]:
+    """
+    Converts a piece of text into a 1024-number vector representing
+    its meaning.
+
+    input_type: Voyage's API distinguishes between "document" (text
+    being STORED for later search - e.g. a signal's summary when an
+    agent writes it) and "query" (text being used to SEARCH - e.g. a
+    user's question in the News DB Tool). Voyage embeds these two
+    slightly differently under the hood to improve retrieval quality
+    - passing the wrong one won't error, but will quietly make
+    semantic search less accurate. Callers must be explicit rather
+    than us silently defaulting to one.
+    """
+    result = await _client.embed(
+        texts=[text],
+        model=EMBEDDING_MODEL,
+        input_type=input_type,
+    )
+    return result.embeddings[0]

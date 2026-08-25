@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     with a confusing crash.
     """
 
-    database_url: str                    
+    database_url: str                   
     conversation_database_url: str       
     redis_url: str
     anthropic_api_key: str
@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     langchain_tracing_v2: bool = False
     langchain_project: str = "tech-intel-agent"
     sentry_dsn: str = ""
+    environment: str = "local"   
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -46,3 +46,17 @@ Description: {description}
 README excerpt:
 {readme_excerpt}
 """
+
+# Matches call_llm's json_schema parameter - forces Claude to answer
+# through a tool call shaped exactly like this, instead of us hoping
+# free text happens to parse as JSON.
+GITHUB_FILTER_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "novelty": {"type": "integer", "minimum": 1, "maximum": 5},
+        "relevance": {"type": "integer", "minimum": 1, "maximum": 5},
+        "applicability": {"type": "integer", "minimum": 1, "maximum": 5},
+        "justification": {"type": "string"},
+    },
+    "required": ["novelty", "relevance", "applicability", "justification"],
+}
