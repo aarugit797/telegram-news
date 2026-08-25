@@ -10,23 +10,22 @@ class Settings(BaseSettings):
     with a confusing crash.
     """
 
-    database_url: str                    # News DB
-    conversation_database_url: str       # Conversation DB - separate database entirely
+    database_url: str                    
+    conversation_database_url: str       
     redis_url: str
     anthropic_api_key: str
 
-    # Used by the responder + Twilio sender
+    default_llm_model: str = "claude-haiku-4-5-20251001"
+    llm_timeout_seconds: float = 20.0
+
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
     twilio_whatsapp_number: str = ""
 
-    # Embeddings (News DB Tool + agents writing signals)
     voyage_api_key: str = ""
 
-    # Web search tool
     tavily_api_key: str = ""
 
-    # Observability
     langchain_api_key: str = ""
     langchain_tracing_v2: bool = False
     langchain_project: str = "tech-intel-agent"
@@ -39,6 +38,4 @@ class Settings(BaseSettings):
     )
 
 
-# Created once, imported everywhere else in the app.
-# This is a common pattern called a "singleton config object".
 settings = Settings()
