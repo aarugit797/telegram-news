@@ -15,9 +15,9 @@ async def insert_signal(session: AsyncSession, signal_data: dict) -> Signal:
     composite_score, filter_justification, embedding).
     """
     signal = Signal(**signal_data)
-    session.add(signal)          # stages the insert - not yet sent to Postgres
-    await session.commit()       # actually sends it and waits for confirmation
-    await session.refresh(signal)  # reloads any DB-generated fields (like id, created_at)
+    session.add(signal)          
+    await session.commit()       
+    await session.refresh(signal)  
     return signal
 
 
@@ -28,7 +28,7 @@ async def get_unsent_signals(session: AsyncSession) -> list[Signal]:
     """
     result = await session.execute(
         select(Signal).where(
-            Signal.is_sent == False,   # noqa: E712 - SQLAlchemy requires == not `is False` here
+            Signal.is_sent == False,   
             Signal.is_deleted == False,
         )
     )
