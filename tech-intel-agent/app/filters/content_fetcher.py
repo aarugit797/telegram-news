@@ -1,11 +1,23 @@
 import httpx
 from bs4 import BeautifulSoup
 
+from app.core.config import settings
 from app.core.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-GITHUB_API_HEADERS = {"Accept": "application/vnd.github.raw+json"}
+
+def _github_headers() -> dict:
+    """
+    Adds an Authorization header when a token is configured -
+    unauthenticated GitHub API calls are capped at 60/hour, while a
+    token raises that to 5000/hour. Falls back gracefully to
+    unauthenticated if no token is set, rather than failing outright.
+    """
+    headers = {"Accept": "application/vnd.github.raw+json"}
+    if settings.github_token:
+        headers["Authorization"] = f"Bearer {settings.github_token}"
+    return headers
 
 
 async def fetch_full_content(url: str, source: str) -> str:
@@ -16,9 +28,12 @@ async def fetch_full_content(url: str, source: str) -> str:
 
     Only 3 of our 5 agents actually call this function at all:
 
-    - GitHub: its initial scoring step only saw a short 500-word
-      README excerpt, so a real follow-up fetch is needed to get the
-      rest. Uses GitHub's own structured API (own code path below).
+    - GitHub: scoring uses only cheap trending-feed metadata (name,
+      description, language, star counts) - no README is fetched
+      before this point. This is the ONE and ONLY README fetch for a
+      GitHub signal, and only for repos that already passed both
+      filter stages. Uses GitHub's own structured API (own code path
+      below).
 
     - HackerNews, Blogs/RSS: their initial fetch only had a title and
       a LINK to somewhere else - some arbitrary third-party website
@@ -67,7 +82,7 @@ async def _fetch_github_readme(repo_url: str) -> str:
     api_url = f"https://api.github.com/repos/{owner_repo}/readme"
 
     async with httpx.AsyncClient(timeout=10.0) as http_client:
-        response = await http_client.get(api_url, headers=GITHUB_API_HEADERS)
+        response = await http_client.get(api_url, headers=_github_headers())
         response.raise_for_status()
         return response.text
 

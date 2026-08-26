@@ -15,10 +15,28 @@ async def insert_signal(session: AsyncSession, signal_data: dict) -> Signal:
     composite_score, filter_justification, embedding).
     """
     signal = Signal(**signal_data)
-    session.add(signal)          
-    await session.commit()       
-    await session.refresh(signal)  
+    session.add(signal)          # stages the insert - not yet sent to Postgres
+    await session.commit()       # actually sends it and waits for confirmation
+    await session.refresh(signal)  # reloads any DB-generated fields (like id, created_at)
     return signal
+
+
+async def signal_exists_by_url(session: AsyncSession, url: str) -> bool:
+    """
+    Used by every agent as the FIRST check, before rules_check or any
+    LLM call - a repo/paper/post that stays trending/visible across
+    multiple scheduled runs (e.g. GitHub agent runs every 2 hours; a
+    repo can stay trending for days) would otherwise get re-scored
+    and potentially re-fetched on every single run, wasting LLM calls
+    and API calls on something already evaluated. Checking is_deleted
+    == False only, deliberately not filtering on age - a signal that
+    already exists and hasn't been cleaned up yet is still a
+    duplicate, regardless of how long ago it was written.
+    """
+    result = await session.execute(
+        select(Signal).where(Signal.url == url, Signal.is_deleted == False)  # noqa: E712
+    )
+    return result.scalar_one_or_none() is not None
 
 
 async def get_unsent_signals(session: AsyncSession) -> list[Signal]:
@@ -28,7 +46,7 @@ async def get_unsent_signals(session: AsyncSession) -> list[Signal]:
     """
     result = await session.execute(
         select(Signal).where(
-            Signal.is_sent == False,   
+            Signal.is_sent == False,   # noqa: E712 - SQLAlchemy requires == not `is False` here
             Signal.is_deleted == False,
         )
     )

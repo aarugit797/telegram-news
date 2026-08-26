@@ -2,12 +2,18 @@
 Prompt for the GitHub agent's LLM filter stage.
 
 This runs ONLY after a repo has already passed the rules filter
-(stars_today >= 200). By the time this prompt runs, we already know
-the repo has real momentum - this prompt's only job is judging QUALITY,
-not popularity. Popularity was already checked by the rules engine.
+(stars_today >= 200). Scoring uses ONLY metadata already available
+from the trending feed itself (name, description, language, star
+counts) - deliberately NOT a README excerpt. Fetching anything from
+GitHub's real API before this point would mean paying an API call
+for every trending repo we look at, including the majority that
+fail the filter - exactly the wasteful pattern the two-stage design
+exists to avoid. The README is only ever fetched afterward, by
+content_fetcher.py, for repos that already passed both stages.
 
-We ask Claude to return strict JSON so our code can parse scores
-programmatically without any fragile string-parsing logic.
+JSON output is enforced via call_llm's forced tool-use (json_schema
+below) - not by asking nicely in this prompt text, which is why
+there's no "respond only in JSON" instruction here.
 """
 
 GITHUB_FILTER_SYSTEM_PROMPT = """You are a technical evaluator for a tech intelligence \
@@ -25,31 +31,21 @@ broader software engineering practice? Repos far outside these areas score low e
 they are popular.
 
 applicability: Could a working engineer realistically use, learn from, or be affected by \
-this repo's existence? Purely academic or joke repos score low here even if novel.
+this repo's existence, based on its name and description? Purely academic or joke repos \
+score low even if novel.
 
-Respond with ONLY valid JSON in this exact shape, nothing else before or after it:
-
-{
-  "novelty": <int 1-5>,
-  "relevance": <int 1-5>,
-  "applicability": <int 1-5>,
-  "justification": "<one sentence explaining the scores>"
-}
+Base your judgment only on the repository's name, description, language, and star \
+counts provided - you do not have access to its README or source code at this stage.
 """
 
 GITHUB_FILTER_USER_TEMPLATE = """Repository: {repo_name}
 Language: {language}
-Stars today: {stars_today}
+Stars gained today: {stars_today}
 Total stars: {total_stars}
 Description: {description}
-
-README excerpt:
-{readme_excerpt}
 """
 
-# Matches call_llm's json_schema parameter - forces Claude to answer
-# through a tool call shaped exactly like this, instead of us hoping
-# free text happens to parse as JSON.
+
 GITHUB_FILTER_JSON_SCHEMA = {
     "type": "object",
     "properties": {

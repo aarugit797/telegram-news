@@ -10,10 +10,11 @@ class Settings(BaseSettings):
     with a confusing crash.
     """
 
-    database_url: str                   
-    conversation_database_url: str       
+    database_url: str                    # News DB
+    conversation_database_url: str       # Conversation DB - separate database entirely
     redis_url: str
     anthropic_api_key: str
+
 
     default_llm_model: str = "claude-haiku-4-5-20251001"
     llm_timeout_seconds: float = 20.0
@@ -26,6 +27,10 @@ class Settings(BaseSettings):
 
     tavily_api_key: str = ""
 
+    github_token: str = ""
+    github_trending_api_base: str = "https://api.gitterapp.com/repositories"
+
+    
     langchain_api_key: str = ""
     langchain_tracing_v2: bool = False
     langchain_project: str = "tech-intel-agent"
