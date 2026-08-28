@@ -1,21 +1,39 @@
-"""
-STUB - to be built.
+from app.core.embeddings import get_embedding
+from app.core.llm_client import call_llm
+from app.db.repository_news import search_signals_by_embedding
+from app.db.session_news import get_news_session
+from app.prompts.responder.news_qa import NEWS_QA_SYSTEM_PROMPT, NEWS_QA_USER_TEMPLATE
 
-WHAT: Converts the user's query to a vector via core/embeddings.py,
-runs a pgvector similarity search against the News DB (top 3
-results), and synthesizes an answer STRICTLY from that retrieved
-content using prompts/responder/news_qa.py.
 
-WHY: This is the RAG tool and the core anti-hallucination guarantee -
-if retrieved signals don't contain the answer, it says so explicitly
-rather than filling gaps from the model's general training knowledge.
+async def run_news_db_tool(question: str) -> tuple[str, list]:
+    """
+    The RAG tool. Embeds the user's question with input_type="query"
+    (asymmetric embedding - deliberately different from "document",
+    used when signals are first stored, see core/embeddings.py),
+    searches the News DB by vector similarity, then synthesizes an
+    answer STRICTLY from what was retrieved - never from the LLM's
+    own general knowledge. Returns the answer text plus the signals
+    it was grounded in, so response_composer.py can reference them
+    by source.
+    """
+    query_embedding = await get_embedding(question, input_type="query")
 
-INPUT: User's question text.
+    async with get_news_session() as session:
+        signals = await search_signals_by_embedding(session, query_embedding, limit=3)
 
-OUTPUT: Synthesized answer string + which signals it was grounded in
-(for response_composer.py to reference by source).
+    if not signals:
+        return "I don't have anything relevant in my database on that yet.", []
 
-CONNECTS TO: Called by conversational_agent.py when intent =
-NEWS_QUERY. Uses core/embeddings.py, db/repository_news.py,
-core/llm_client.py.
-"""
+    retrieved_text = "\n\n".join(
+        f"Source: {s.source}\nTitle: {s.title}\nSummary: {s.summary}\nDetails: {s.full_content[:800]}"
+        for s in signals
+    )
+
+    result = await call_llm(
+        system_prompt=NEWS_QA_SYSTEM_PROMPT,
+        user_message=NEWS_QA_USER_TEMPLATE.format(retrieved_signals=retrieved_text, question=question),
+        trace_name="news-db-tool",
+        temperature=0.3,
+    )
+
+    return result.content, signals
