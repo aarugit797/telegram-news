@@ -64,7 +64,6 @@ def get_logger(name: str) -> logging.Logger:
         handler.setFormatter(JsonFormatter())
         logger.addHandler(handler)
         logger.setLevel(logging.INFO)
-        logger.propagate = False  # don't also duplicate through the root logger's own handlers
-
+        logger.propagate = False  
     return logger
 PYEOF
