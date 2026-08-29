@@ -28,11 +28,11 @@ class Signal(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
 
-    source: Mapped[str] = mapped_column(String(50))          
+    source: Mapped[str] = mapped_column(String(50))          # "github" | "hackernews" | "arxiv" | "blogs" | "rss"
     title: Mapped[str] = mapped_column(String(500))
     url: Mapped[str] = mapped_column(String(1000))
-    full_content: Mapped[str] = mapped_column(Text)            
-    summary: Mapped[str] = mapped_column(Text)                 
+    full_content: Mapped[str] = mapped_column(Text)           # full README / abstract / post text
+    summary: Mapped[str] = mapped_column(Text)                 # one-line plain English summary
 
     novelty_score: Mapped[float] = mapped_column(Float)
     relevance_score: Mapped[float] = mapped_column(Float)
@@ -53,6 +53,7 @@ class Signal(Base):
 
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # 1024 matches Voyage AI's voyage-3 embedding output dimension.
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1024), nullable=True)
 
 
@@ -71,7 +72,7 @@ class Batch(Base):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     user_count: Mapped[int] = mapped_column(Integer, default=0)
     signal_ids: Mapped[list[uuid.UUID]] = mapped_column(ARRAY(UUID(as_uuid=True)))
-    delivery_status: Mapped[str] = mapped_column(String(20), default="pending")
+    delivery_status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | delivered | failed
 
 
 class DailyStat(Base):

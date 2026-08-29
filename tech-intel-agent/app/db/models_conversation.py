@@ -54,14 +54,17 @@ class Message(Base):
 
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
 
-    direction: Mapped[str] = mapped_column(String(10))          
+    direction: Mapped[str] = mapped_column(String(10))          # "inbound" | "outbound"
     message_text: Mapped[str] = mapped_column(Text)
 
     intent_classification: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # "SMALLTALK" | "NEWS_QUERY" | "NOTIFICATION_FOLLOWUP" | "WEB_QUESTION" | None for outbound
 
     guardrail_result: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # "PASS" | "INJECTION_DETECTED" | "OFF_TOPIC" | None for outbound
 
     tool_used: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # "smalltalk" | "news_db" | "notification_history" | "web_search" | None
 
     langsmith_run_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     tokens_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -86,8 +89,8 @@ class Summary(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     summary_text: Mapped[str] = mapped_column(Text)
 
-    covers_from: Mapped[datetime] = mapped_column(DateTime)   
-    covers_to: Mapped[datetime] = mapped_column(DateTime)     
+    covers_from: Mapped[datetime] = mapped_column(DateTime)   # earliest message this summary represents
+    covers_to: Mapped[datetime] = mapped_column(DateTime)     # latest message this summary represents
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -110,4 +113,3 @@ class DailyCost(Base):
     llm_calls: Mapped[int] = mapped_column(Integer, default=0)
     total_tokens: Mapped[int] = mapped_column(Integer, default=0)
     estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
-

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import select, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models_news import Signal, Batch
@@ -98,6 +98,29 @@ async def get_batch_by_id(session: AsyncSession, batch_id: uuid.UUID) -> Batch |
     return result.scalar_one_or_none()
 
 
+async def get_most_recent_batch(session: AsyncSession) -> Batch | None:
+    """
+    Used by the Notification History Tool. Since v1 sends an
+    identical batch to every active user (no personalization - see
+    project scope), "the most recent batch sent to this user" is
+    simply the most recent successfully delivered batch, period -
+    there is no per-user batch link to look up.
+    """
+    result = await session.execute(
+        select(Batch)
+        .where(Batch.delivery_status.in_(["delivered", "partial"]))
+        .order_by(Batch.sent_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_signals_by_ids(session: AsyncSession, signal_ids: list[uuid.UUID]) -> list[Signal]:
+    """Used by the Notification History Tool to fetch the actual Signal rows for a batch's signal_ids."""
+    result = await session.execute(select(Signal).where(Signal.id.in_(signal_ids)))
+    return list(result.scalars().all())
+
+
 async def search_signals_by_embedding(
     session: AsyncSession, query_embedding: list[float], limit: int = 3
 ) -> list[Signal]:
@@ -118,3 +141,51 @@ async def search_signals_by_embedding(
         .limit(limit)
     )
     return list(result.scalars().all())
+
+
+async def soft_delete_old_signals(session: AsyncSession, older_than: datetime) -> int:
+    """
+    Used by the weekly cleanup job. Sets is_deleted=True on any
+    signal created before `older_than` and not already soft-deleted.
+    Soft delete rather than removing the row outright - keeps data
+    recoverable and stats history intact. Returns rows affected.
+    """
+    result = await session.execute(
+        update(Signal)
+        .where(Signal.created_at < older_than, Signal.is_deleted == False)  # noqa: E712
+        .values(is_deleted=True)
+    )
+    await session.commit()
+    return result.rowcount
+
+
+async def hard_delete_old_signals(session: AsyncSession, older_than: datetime) -> int:
+    """
+    Used by the weekly cleanup job - permanently removes signals that
+    are ALREADY soft-deleted and older than the hard-delete cutoff.
+    Never deletes something in one step that hasn't already passed
+    through the soft-delete stage first.
+    """
+    result = await session.execute(
+        delete(Signal).where(Signal.created_at < older_than, Signal.is_deleted == True)  # noqa: E712
+    )
+    await session.commit()
+    return result.rowcount
+
+
+async def update_batch_delivery(
+    session: AsyncSession, batch_id: uuid.UUID, user_count: int, delivery_status: str
+) -> None:
+    """
+    Used by sender/twilio_sender.py AFTER actually attempting
+    delivery - fills in how many users were reached and whether it
+    succeeded. Deliberately not set at batch_assembly time, since
+    neither is known until delivery has genuinely been attempted.
+    """
+    result = await session.execute(select(Batch).where(Batch.id == batch_id))
+    batch = result.scalar_one_or_none()
+    if batch:
+        batch.user_count = user_count
+        batch.delivery_status = delivery_status
+        batch.sent_at = datetime.utcnow()
+        await session.commit()

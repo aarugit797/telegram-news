@@ -19,6 +19,17 @@ async def is_user_whitelisted(session: AsyncSession, whatsapp_number: str) -> bo
     return user is not None and user.is_whitelisted
 
 
+async def get_active_users(session: AsyncSession) -> list[User]:
+    """
+    Used by sender/twilio_sender.py to know who to fan a composed
+    batch's messages out to - every whitelisted, active user.
+    """
+    result = await session.execute(
+        select(User).where(User.is_whitelisted == True, User.is_active == True)  # noqa: E712
+    )
+    return list(result.scalars().all())
+
+
 async def get_or_create_user(session: AsyncSession, whatsapp_number: str) -> User:
     """
     Used right after the whitelist check passes. Whitelisted numbers
