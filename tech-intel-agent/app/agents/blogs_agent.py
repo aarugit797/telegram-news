@@ -1,22 +1,143 @@
-"""
-STUB - to be built.
+import feedparser
+import httpx
+from datetime import datetime, timedelta, timezone
 
-WHAT: The AI Lab Blogs source agent. Monitors RSS feeds from
-Anthropic, OpenAI, Google DeepMind, Hugging Face, Meta AI, Mistral.
-No rules filter (source is inherently credible) - only an LLM
-novelty check (prompts/filters/blogs_filter.py) distinguishing real
-announcements from marketing content.
+from app.core.embeddings import get_embedding
+from app.core.logging_config import get_logger
+from app.db.repository_news import signal_exists_by_url, insert_signal
+from app.db.session_news import get_news_session
+from app.filters.content_fetcher import fetch_full_content
+from app.filters.hybrid_filter import run_hybrid_filter
+from app.prompts.filters.blogs_filter import (
+    BLOGS_FILTER_SYSTEM_PROMPT,
+    BLOGS_FILTER_USER_TEMPLATE,
+    BLOGS_FILTER_JSON_SCHEMA,
+)
+from app.queues.redis_client import push_signal, push_dead_letter
 
-WHY: Owns exactly one data source end to end - independent schedule
-(every 30 minutes) so model releases are caught fast, independent
-failure handling.
+logger = get_logger(__name__)
 
-INPUT: Nothing external - triggered by agents/scheduler.py.
+# Only sources with a CONFIRMED, verified-working RSS feed as of
+# Aug 2026 are included here. Anthropic has no official feed - this
+# uses a third-party mirror, carrying the same "unofficial, could
+# break" risk already flagged for the GitHub trending source. Meta
+# AI and Mistral are deliberately left out entirely rather than
+# guessing a feed URL - a wrong URL here would fail silently on
+# every single run with no clear signal why.
+BLOG_FEEDS = {
+    "Anthropic": "https://rsshub.bestblogs.dev/anthropic/news",
+    "OpenAI": "https://openai.com/news/rss.xml",
+    "Google DeepMind": "https://deepmind.google/blog/feed/basic/",
+    "Hugging Face": "https://huggingface.co/blog/feed.xml",
+}
 
-OUTPUT: Nothing returned - writes approved Signal rows to News DB,
-pushes new signal IDs onto the Redis signal queue (DB 0).
+LOOKBACK_HOURS = 1  # matches this agent's own 30-minute schedule, with buffer
 
-CONNECTS TO: Scheduled by agents/scheduler.py. Uses
-filters/hybrid_filter.py, filters/content_fetcher.py,
-core/embeddings.py, db/repository_news.py, queues/redis_client.py.
-"""
+
+def _rules_check(_: dict) -> bool:
+    """
+    Always True - official lab blogs are inherently credible, so
+    there's no numeric threshold to check. The LLM novelty judgment
+    (blogs_filter.py) is the only real filter for this source.
+    """
+    return True
+
+
+async def _fetch_blog_posts() -> list[dict]:
+    posts: list[dict] = []
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=LOOKBACK_HOURS)
+
+    async with httpx.AsyncClient(timeout=15.0) as http_client:
+        for lab_name, feed_url in BLOG_FEEDS.items():
+            try:
+                response = await http_client.get(feed_url)
+                response.raise_for_status()
+            except Exception as e:
+                logger.warning(
+                    "Failed to fetch blog feed",
+                    extra={"extra_fields": {"lab": lab_name, "error": str(e)}},
+                )
+                continue
+
+            feed = feedparser.parse(response.text)
+            for entry in feed.entries:
+                try:
+                    published = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
+                    if published < cutoff:
+                        continue
+                except Exception:
+                    pass  # some feeds omit a reliable timestamp - don't drop the entry over that alone
+
+                posts.append({
+                    "lab_name": lab_name,
+                    "title": entry.get("title", ""),
+                    "excerpt": entry.get("summary", "")[:1000],
+                    "url": entry.get("link", ""),
+                })
+    return posts
+
+
+async def run_blogs_agent() -> None:
+    """Triggered every 30 minutes by agents/scheduler.py."""
+    posts = await _fetch_blog_posts()
+
+    counts = {"fetched": len(posts), "skipped_duplicate": 0, "rejected_llm": 0, "approved": 0, "errors": 0}
+
+    async with get_news_session() as session:
+        for post in posts:
+            post_url = post.get("url", "")
+            try:
+                if not post_url:
+                    continue
+
+                if await signal_exists_by_url(session, post_url):
+                    counts["skipped_duplicate"] += 1
+                    continue
+
+                filter_result = await run_hybrid_filter(
+                    raw_data=post,
+                    rules_check=_rules_check,
+                    system_prompt=BLOGS_FILTER_SYSTEM_PROMPT,
+                    user_message=BLOGS_FILTER_USER_TEMPLATE.format(
+                        lab_name=post.get("lab_name", ""),
+                        title=post.get("title", ""),
+                        excerpt=post.get("excerpt", ""),
+                    ),
+                    json_schema=BLOGS_FILTER_JSON_SCHEMA,
+                    trace_name="blogs-filter",
+                )
+
+                if not filter_result.passed:
+                    counts["rejected_llm"] += 1
+                    continue
+
+                full_content = await fetch_full_content(post_url, source="blogs")
+                summary = filter_result.justification or post.get("title", "")
+                embedding = await get_embedding(summary, input_type="document")
+
+                signal = await insert_signal(session, {
+                    "source": "blogs",
+                    "title": post.get("title", ""),
+                    "url": post_url,
+                    "full_content": full_content,
+                    "summary": summary,
+                    "novelty_score": filter_result.scores["novelty"],
+                    "relevance_score": filter_result.scores["relevance"],
+                    "applicability_score": filter_result.scores["applicability"],
+                    "composite_score": filter_result.composite_score,
+                    "filter_justification": filter_result.justification,
+                    "embedding": embedding,
+                })
+
+                await push_signal(str(signal.id))
+                counts["approved"] += 1
+
+            except Exception as e:
+                counts["errors"] = counts.get("errors", 0) + 1
+                logger.error(
+                    "Unexpected failure processing a blog post",
+                    extra={"extra_fields": {"post_url": post_url, "error": str(e)}},
+                )
+                await push_dead_letter({"agent": "blogs", "post_url": post_url, "error": str(e)})
+
+    logger.info("Blogs agent run complete", extra={"extra_fields": counts})
