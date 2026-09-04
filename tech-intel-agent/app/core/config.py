@@ -29,6 +29,7 @@ class Settings(BaseSettings):
 
     github_token: str = ""
     github_trending_api_base: str = "https://api.gitterapp.com/repositories"
+    ARXIV_API_URL = "http://export.arxiv.org/api/query"
 
     
     langchain_api_key: str = ""

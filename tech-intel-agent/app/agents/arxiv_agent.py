@@ -1,6 +1,7 @@
 import feedparser
 import httpx
 from datetime import datetime, timedelta, timezone
+from app.core.config import settings
 
 from app.core.embeddings import get_embedding
 from app.core.logging_config import get_logger
@@ -16,7 +17,7 @@ from app.queues.redis_client import push_signal, push_dead_letter
 
 logger = get_logger(__name__)
 
-ARXIV_API_URL = "http://export.arxiv.org/api/query"
+ARXIV_API_URL = settings.ARXIV_API_URL
 CATEGORIES = ["cs.AI", "cs.LG", "cs.CL", "cs.CV"]
 MAX_RESULTS = 50
 ABSTRACT_WORD_THRESHOLD = 150
