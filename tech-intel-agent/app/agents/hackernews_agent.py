@@ -1,6 +1,7 @@
 import httpx
 
 from app.core.embeddings import get_embedding
+from app.core.config import HN_TOP_STORIES_URL, HN_ITEM_URL
 from app.core.logging_config import get_logger
 from app.db.repository_news import signal_exists_by_url, insert_signal
 from app.db.session_news import get_news_session
@@ -15,8 +16,6 @@ from app.queues.redis_client import push_signal, push_dead_letter
 
 logger = get_logger(__name__)
 
-HN_TOP_STORIES_URL = "https://hacker-news.firebaseio.com/v0/topstories.json"
-HN_ITEM_URL = "https://hacker-news.firebaseio.com/v0/item/{item_id}.json"
 STORIES_TO_CHECK = 30
 TOP_COMMENTS_TO_FETCH = 10
 SCORE_THRESHOLD = 100

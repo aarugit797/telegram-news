@@ -2,6 +2,7 @@ import feedparser
 import httpx
 from datetime import datetime, timedelta, timezone
 
+from app.config import NEWSLETTER_FEEDS
 from app.core.embeddings import get_embedding
 from app.core.logging_config import get_logger
 from app.db.repository_news import signal_exists_by_url, insert_signal
@@ -16,17 +17,6 @@ from app.prompts.filters.rss_filter import (
 from app.queues.redis_client import push_signal, push_dead_letter
 
 logger = get_logger(__name__)
-
-# Only CONFIRMED, verified-working feed URLs are included. TLDR AI,
-# The Batch, and ByteByteGo were part of our original design but
-# their exact current feed URLs were NOT confirmed during research -
-# rather than guess and risk a silently-broken source, they're left
-# out until verified. This is a known, honest gap, not an oversight -
-# add them here once their real feed URLs are confirmed.
-NEWSLETTER_FEEDS = {
-    "Simon Willison": "https://simonwillison.net/atom/everything/",
-    "Latent.Space": "https://latent.space/feed",
-}
 
 LOOKBACK_HOURS = 25  # matches this agent's own once-daily schedule, with buffer
 

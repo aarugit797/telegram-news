@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.core.embeddings import get_embedding
 from app.core.logging_config import get_logger
+from app.config import BLOG_FEEDS
 from app.db.repository_news import signal_exists_by_url, insert_signal
 from app.db.session_news import get_news_session
 from app.filters.content_fetcher import fetch_full_content
@@ -16,20 +17,6 @@ from app.prompts.filters.blogs_filter import (
 from app.queues.redis_client import push_signal, push_dead_letter
 
 logger = get_logger(__name__)
-
-# Only sources with a CONFIRMED, verified-working RSS feed as of
-# Aug 2026 are included here. Anthropic has no official feed - this
-# uses a third-party mirror, carrying the same "unofficial, could
-# break" risk already flagged for the GitHub trending source. Meta
-# AI and Mistral are deliberately left out entirely rather than
-# guessing a feed URL - a wrong URL here would fail silently on
-# every single run with no clear signal why.
-BLOG_FEEDS = {
-    "Anthropic": "https://rsshub.bestblogs.dev/anthropic/news",
-    "OpenAI": "https://openai.com/news/rss.xml",
-    "Google DeepMind": "https://deepmind.google/blog/feed/basic/",
-    "Hugging Face": "https://huggingface.co/blog/feed.xml",
-}
 
 LOOKBACK_HOURS = 1  # matches this agent's own 30-minute schedule, with buffer
 
