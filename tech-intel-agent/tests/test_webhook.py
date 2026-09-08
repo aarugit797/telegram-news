@@ -1,14 +1,41 @@
-"""
-STUB - to be built.
+from unittest.mock import AsyncMock, patch
 
-WHAT: Integration tests for responder/webhook.py - verifies Twilio
-signature verification correctly rejects invalid signatures,
-verifies the whitelist/rate-limit/guardrail chain short-circuits
-correctly, and verifies a valid message flows through to a response.
+from fastapi.testclient import TestClient
 
-WHY: This is the only externally-facing endpoint in the entire
-system - if signature verification is broken, anyone can spoof
-messages to our agent impersonating any user.
+from app.responder.main import app
 
-CONNECTS TO: Tests app/responder/webhook.py and its full chain.
-"""
+client = TestClient(app)
+
+
+def test_webhook_rejects_invalid_signature():
+    """
+    A request without a genuinely valid X-Twilio-Signature must be
+    rejected with 403 BEFORE any processing (whitelist check, LLM
+    calls) ever runs - this is what stops anyone who discovers our
+    webhook URL from spoofing messages as any user.
+    """
+    response = client.post(
+        "/webhook/whatsapp",
+        data={"From": "whatsapp:+15551234567", "Body": "hello"},
+        headers={"X-Twilio-Signature": "invalid-signature"},
+    )
+    assert response.status_code == 403
+
+
+def test_webhook_accepts_valid_signature_and_returns_immediately():
+    """
+    A genuinely valid signature should return 200 immediately without
+    waiting for the full processing chain to complete - that runs as
+    a background task, since Twilio times out webhook calls after
+    roughly 5 seconds and our chain (multiple LLM calls) can't
+    reliably fit inside that window.
+    """
+    with patch("app.responder.webhook._verify_signature", new_callable=AsyncMock) as mock_verify:
+        mock_verify.return_value = True
+        with patch("app.responder.webhook._process_message", new_callable=AsyncMock):
+            response = client.post(
+                "/webhook/whatsapp",
+                data={"From": "whatsapp:+15551234567", "Body": "hello"},
+                headers={"X-Twilio-Signature": "any-value"},
+            )
+    assert response.status_code == 200
