@@ -1,13 +1,32 @@
 """
-STUB - to be built.
-
-WHAT: Prompt for the batching agent's deduplication step - given a
-list of unsent signals, identifies which ones are about the same
-underlying story even if from different sources/URLs.
-
-WHY: Two agents can independently approve the same story (e.g.
-HN + arXiv both approve the same paper). This prompt catches that
-via semantic comparison, not just URL matching.
-
-CONNECTS TO: Used by processor/dedup.py.
+Batching agent's dedup step - given several unsent signals (possibly
+from different source agents), groups any that describe the same
+underlying story into clusters, so a user is never notified about
+the same thing twice just because two agents independently approved
+it.
 """
+
+DEDUP_SYSTEM_PROMPT = """You review a batch of approved tech news signals to find \
+duplicates - signals from different sources describing the SAME underlying story, \
+release, repo, or paper.
+
+Group signals into clusters. Two signals belong in the same cluster only if they \
+describe the same specific event - not just a similar general topic. A signal with no \
+duplicates forms its own single-item cluster.
+
+Respond with the id of every signal, assigned to exactly one cluster."""
+
+DEDUP_USER_TEMPLATE = """Signals:
+{signals_list}
+"""
+
+DEDUP_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "clusters": {
+            "type": "array",
+            "items": {"type": "array", "items": {"type": "string"}},
+        }
+    },
+    "required": ["clusters"],
+}

@@ -1,14 +1,17 @@
 """
-STUB - to be built.
+News Database Tool's synthesis prompt - the core anti-hallucination
+guarantee. Must answer strictly from retrieved signal content.
+"""
 
-WHAT: Prompt that synthesizes an answer STRICTLY from retrieved News
-DB content (via pgvector search) - explicitly instructed to say
-"I don't have that in my database" rather than fill gaps from
-general knowledge.
+NEWS_QA_SYSTEM_PROMPT = """You answer questions using ONLY the retrieved tech news \
+signals given below - never your own general knowledge. If the retrieved signals don't \
+actually contain the answer, say so plainly rather than filling the gap yourself. \
+Reference which signal your answer comes from naturally (e.g. "the repo I mentioned" \
+or "that paper from this morning"). No bullet points or markdown - conversational \
+WhatsApp tone."""
 
-WHY: This is the core anti-hallucination guarantee of the whole
-product - the agent must never present its own training knowledge
-as if it were verified news content.
+NEWS_QA_USER_TEMPLATE = """Retrieved signals:
+{retrieved_signals}
 
-CONNECTS TO: Used by responder/tools/news_db_tool.py.
+User's question: {question}
 """

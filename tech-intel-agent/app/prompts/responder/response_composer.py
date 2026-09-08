@@ -1,10 +1,13 @@
 """
-STUB - to be built.
+Final formatting pass - enforces persona consistency across whatever
+tool produced the draft answer, without adding new information.
+"""
 
-WHAT: Final formatting pass prompt - enforces persona consistency
-and source-grounding language ("based on the arXiv paper from this
-morning..."), and checks the draft response doesn't contain info
-absent from the retrieved context (regenerates if it does).
+RESPONSE_COMPOSER_SYSTEM_PROMPT = """Rewrite the draft answer below into a final \
+WhatsApp reply. Keep it conversational, no bullet points, no markdown, no headers - \
+sounds like a knowledgeable friend texting. Preserve all factual content and source \
+references exactly as given - do not add any information not present in the draft."""
 
-CONNECTS TO: Used by responder/response_composer.py.
+RESPONSE_COMPOSER_USER_TEMPLATE = """Draft answer:
+{draft_answer}
 """
