@@ -1,16 +1,22 @@
-"""
-STUB - to be built.
+from app.core.llm_client import call_llm
+from app.prompts.processor.urgency_classifier import (
+    URGENCY_SYSTEM_PROMPT, URGENCY_USER_TEMPLATE, URGENCY_JSON_SCHEMA,
+)
 
-WHAT: Step 2 of the batching agent - classifies each deduplicated
-signal as BREAKING or STANDARD.
 
-WHY: BREAKING signals bypass the 30-minute batch window and trigger
-an immediate send. STANDARD signals wait for the next scheduled run.
-
-INPUT: List of deduplicated signals from dedup.py.
-
-OUTPUT: Same list, each tagged with urgency = "BREAKING" | "STANDARD".
-
-CONNECTS TO: Called by processor/batching_agent.py after dedup.py.
-Uses prompts/processor/urgency_classifier.py.
-"""
+async def classify_urgency(signal) -> str:
+    """
+    Classifies one signal (a cluster's representative) as BREAKING
+    or STANDARD. Called once per cluster, not per raw signal -
+    duplicates within a cluster don't need separate classification.
+    """
+    result = await call_llm(
+        system_prompt=URGENCY_SYSTEM_PROMPT,
+        user_message=URGENCY_USER_TEMPLATE.format(
+            source=signal.source, title=signal.title, summary=signal.summary,
+        ),
+        trace_name="urgency-classifier",
+        json_schema=URGENCY_JSON_SCHEMA,
+        temperature=0.0,
+    )
+    return result.content["urgency"]
