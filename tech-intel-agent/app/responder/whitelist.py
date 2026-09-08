@@ -1,17 +1,24 @@
-"""
-STUB - to be built.
+from app.db.repository_conversation import is_user_whitelisted, get_or_create_user
+from app.db.session_conversation import get_conversation_session
 
-WHAT: Checks if the incoming user's WhatsApp number exists in the
-Conversation DB's users table with is_whitelisted=True.
 
-WHY: For controlled testing with a known set of friends - anyone
-not on the list gets a fixed "invite-only" response with zero LLM
-cost incurred.
+async def check_whitelist(whatsapp_number: str) -> bool:
+    """
+    First check on any incoming message, before any LLM call. Uses
+    is_user_whitelisted (not get_or_create_user) as the actual gate -
+    an unknown number is simply not whitelisted, full stop, rather
+    than being silently created and allowed through.
+    """
+    async with get_conversation_session() as session:
+        return await is_user_whitelisted(session, whatsapp_number)
 
-INPUT: WhatsApp number (str).
 
-OUTPUT: Boolean.
-
-CONNECTS TO: First check called from webhook.py's background task.
-Uses db/repository_conversation.py.
-"""
+async def ensure_user_record(whatsapp_number: str):
+    """
+    Called only AFTER check_whitelist passes - ensures a User row
+    exists (first message from a pre-approved number still needs a
+    row created) so later steps have a real user_id to attach
+    messages, costs, and summaries to.
+    """
+    async with get_conversation_session() as session:
+        return await get_or_create_user(session, whatsapp_number)

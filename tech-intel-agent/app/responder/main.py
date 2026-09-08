@@ -1,19 +1,17 @@
-"""
-STUB - to be built.
+from fastapi import FastAPI
 
-WHAT: The FastAPI application entrypoint for Process Two (WhatsApp
-Responder). Creates the app, registers the webhook route, health
-route, and initializes observability at startup.
+from app.core.observability import init_observability
+from app.core.logging_config import get_logger
+from app.responder.webhook import router as webhook_router
+from app.responder.health import router as health_router
 
-WHY: This is the single process that stays alive listening for
-Twilio webhook calls - separate from pipeline_main.py (Process One)
-per our two-process architecture.
+logger = get_logger(__name__)
 
-INPUT: Nothing external - this IS the entrypoint, run via
-`uvicorn app.responder.main:app`.
+init_observability(service_name="whatsapp-responder", include_fastapi=True)
 
-OUTPUT: A running FastAPI app instance.
+app = FastAPI(title="Tech Intelligence Agent - WhatsApp Responder")
 
-CONNECTS TO: Calls core/observability.py at startup. Registers
-routes from webhook.py and health.py.
-"""
+app.include_router(webhook_router)
+app.include_router(health_router)
+
+logger.info("WhatsApp responder FastAPI app initialized")

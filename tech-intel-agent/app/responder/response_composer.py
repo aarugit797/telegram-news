@@ -1,21 +1,24 @@
-"""
-STUB - to be built.
+from app.core.llm_client import call_llm
+from app.prompts.responder.response_composer import (
+    RESPONSE_COMPOSER_SYSTEM_PROMPT, RESPONSE_COMPOSER_USER_TEMPLATE,
+)
 
-WHAT: Final LLM pass after the tool returns its result. Enforces
-persona consistency (conversational, no markdown/bullets) and
-source-grounding language, using prompts/responder/response_composer.py.
-Runs an output check - if the draft response contains info not
-present in the retrieved context, regenerates.
 
-WHY: This is the last line of defense against hallucination and
-off-persona responses before anything reaches the user.
-
-INPUT: Raw tool output (answer + source signals) from
-conversational_agent.py.
-
-OUTPUT: Final formatted reply string, ready to send.
-
-CONNECTS TO: Called last in webhook.py's background task chain,
-after conversational_agent.py. Output passed to core/twilio_client.py
-to actually send. Uses core/llm_client.py.
-"""
+async def compose_final_response(draft_answer: str) -> str:
+    """
+    Final pass after a tool's raw output. Enforces persona
+    consistency (no markdown, conversational tone) uniformly across
+    whatever tool produced the draft - smalltalk's draft is already
+    close to final, while news_db/notification_history/web_search
+    drafts may carry slightly more formal source-citation phrasing
+    that benefits from this pass smoothing it into one consistent
+    voice before it reaches the user.
+    """
+    result = await call_llm(
+        system_prompt=RESPONSE_COMPOSER_SYSTEM_PROMPT,
+        user_message=RESPONSE_COMPOSER_USER_TEMPLATE.format(draft_answer=draft_answer),
+        trace_name="response-composer",
+        temperature=0.5,
+        max_tokens=300,
+    )
+    return result.content

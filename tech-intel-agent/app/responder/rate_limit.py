@@ -1,16 +1,15 @@
-"""
-STUB - to be built.
+from app.queues.redis_client import increment_rate_limit
 
-WHAT: Checks the user's message count for today against a 50/day
-cap, stored in Redis DB 2 with a 24-hour TTL.
+DAILY_MESSAGE_LIMIT = 50
 
-WHY: Prevents any single user (malicious or accidental) from running
-up LLM costs or hammering the system.
 
-INPUT: WhatsApp number (str).
-
-OUTPUT: Boolean (under limit or not).
-
-CONNECTS TO: Second check called from webhook.py, after whitelist.py
-passes. Uses queues/redis_client.py.
-"""
+async def check_and_increment_rate_limit(user_id: str) -> bool:
+    """
+    Called after the whitelist check passes. Increments today's
+    count FIRST, then checks the result against the limit - this
+    means the message that pushes a user over the limit is itself
+    counted (so the limit is a hard "50 total today", not "50 before
+    you're warned"). Returns True if the user is still under the cap.
+    """
+    count = await increment_rate_limit(user_id)
+    return count <= DAILY_MESSAGE_LIMIT
