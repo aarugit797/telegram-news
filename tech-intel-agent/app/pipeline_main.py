@@ -1,21 +1,35 @@
-"""
-STUB - to be built.
+import asyncio
 
-WHAT: The entrypoint for Process One (Intelligence Pipeline).
-Initializes observability, starts the APScheduler with all 5 agents
-and the cleanup job registered, and keeps the process alive
-indefinitely.
+from app.core.observability import init_observability
+from app.core.logging_config import get_logger
+from app.agents.scheduler import build_scheduler
 
-WHY: This is a completely separate long-running process from
-Process Two (responder/main.py) - they never import from each other
-directly, only communicate through the shared News DB and Redis.
+logger = get_logger(__name__)
 
-INPUT: Nothing external - this IS the entrypoint, run directly via
-`python -m app.pipeline_main`.
 
-OUTPUT: A running process, alive forever until stopped.
+async def main() -> None:
+    """
+    Entrypoint for Process One (Intelligence Pipeline). Initializes
+    observability, builds and starts the scheduler (5 source agents,
+    batching agent, sender worker, weekly cleanup), then keeps the
+    process alive forever.
+    """
+    init_observability(service_name="intelligence-pipeline")
 
-CONNECTS TO: Calls core/observability.py at startup, then
-agents/scheduler.py to register and start all scheduled jobs
-(5 agents + batching_agent.py + cleanup_job.py).
-"""
+    scheduler = build_scheduler()
+    scheduler.start()
+
+    logger.info("Intelligence pipeline started - scheduler running")
+
+    # AsyncIOScheduler runs on the same event loop we're already in -
+    # this loop just needs to never exit for the process to keep
+    # running the scheduled jobs indefinitely.
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except (KeyboardInterrupt, SystemExit):
+        scheduler.shutdown()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
