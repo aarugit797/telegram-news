@@ -1,22 +1,30 @@
-"""
-STUB - to be built.
+from app.core.llm_client import call_llm
+from app.db.repository_conversation import get_recent_messages
+from app.db.session_conversation import get_conversation_session
+from app.prompts.responder.guardrail import (
+    GUARDRAIL_SYSTEM_PROMPT, GUARDRAIL_USER_TEMPLATE, GUARDRAIL_JSON_SCHEMA,
+)
 
-WHAT: Reads the current message plus the last 5 messages from
-Conversation DB (multi-turn context matters for catching injection
-attempts that build across turns), and classifies as PASS,
-INJECTION_DETECTED, or OFF_TOPIC using prompts/responder/guardrail.py.
+HISTORY_MESSAGES_FOR_GUARDRAIL = 5
 
-WHY: This agent must ONLY discuss tech news - not a general chatbot.
-This is the component that enforces that boundary before any other
-agent logic runs.
 
-INPUT: Current message text, user_id (to fetch recent history).
+async def check_guardrail(user_id, current_message: str) -> str:
+    """
+    Runs before Intent Classifier - the current message is checked
+    ALONGSIDE the last 5 messages (not in isolation), since a
+    prompt-injection attempt can be built up gradually across turns.
+    Returns "PASS" | "INJECTION_DETECTED" | "OFF_TOPIC".
+    """
+    async with get_conversation_session() as session:
+        recent = await get_recent_messages(session, user_id, limit=HISTORY_MESSAGES_FOR_GUARDRAIL)
 
-OUTPUT: One of PASS | INJECTION_DETECTED | OFF_TOPIC. The latter two
-short-circuit to a fixed response and never reach the conversational
-agent.
+    history_text = "\n".join(f"[{m.direction}] {m.message_text}" for m in reversed(recent)) or "(no prior history)"
 
-CONNECTS TO: Called from webhook.py after rate_limit.py passes.
-Uses core/llm_client.py, db/repository_conversation.py. Logs
-injection attempts to Sentry via core/observability.py.
-"""
+    result = await call_llm(
+        system_prompt=GUARDRAIL_SYSTEM_PROMPT,
+        user_message=GUARDRAIL_USER_TEMPLATE.format(history=history_text, message=current_message),
+        trace_name="guardrail-check",
+        json_schema=GUARDRAIL_JSON_SCHEMA,
+        temperature=0.0,
+    )
+    return result.content["classification"]
