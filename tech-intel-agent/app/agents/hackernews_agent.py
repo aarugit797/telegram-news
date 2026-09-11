@@ -1,7 +1,7 @@
 import httpx
 
 from app.core.embeddings import get_embedding
-from app.core.config import HN_TOP_STORIES_URL, HN_ITEM_URL
+from app.core.sources import HN_TOP_STORIES_URL, HN_ITEM_URL
 from app.core.logging_config import get_logger
 from app.db.repository_news import signal_exists_by_url, insert_signal
 from app.db.session_news import get_news_session

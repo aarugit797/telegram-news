@@ -9,8 +9,26 @@ from app.core.config import settings
 # rest of our async codebase. Using the plain sync client here would
 # block our event loop for the duration of every Twilio API call,
 # undoing the whole point of building this system async.
-_http_client = AsyncTwilioHttpClient()
-_client = Client(settings.twilio_account_sid, settings.twilio_auth_token, http_client=_http_client)
+#
+# Built lazily rather than at import time: AsyncTwilioHttpClient's
+# constructor creates an aiohttp.ClientSession, which calls
+# asyncio.get_running_loop() and raises "no running event loop" when
+# there isn't one yet. At import there never is - so constructing it
+# at module scope made this module (and therefore the whole scheduler
+# and responder) impossible to import. Building it on first use puts
+# it inside a running loop, where it belongs.
+_client: Client | None = None
+
+
+def _get_client() -> Client:
+    global _client
+    if _client is None:
+        _client = Client(
+            settings.twilio_account_sid,
+            settings.twilio_auth_token,
+            http_client=AsyncTwilioHttpClient(),
+        )
+    return _client
 
 
 async def send_whatsapp_message(to_number: str, body: str) -> str:
@@ -20,7 +38,7 @@ async def send_whatsapp_message(to_number: str, body: str) -> str:
     call through this one function, instead of each independently
     wrapping the Twilio SDK.
     """
-    message = await _client.messages.create_async(
+    message = await _get_client().messages.create_async(
         from_=settings.twilio_whatsapp_number,
         to=f"whatsapp:{to_number}",
         body=body,

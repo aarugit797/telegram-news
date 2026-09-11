@@ -2,7 +2,7 @@ import feedparser
 import httpx
 from datetime import datetime, timedelta, timezone
 
-from app.config import NEWSLETTER_FEEDS
+from app.core.sources import NEWSLETTER_FEEDS
 from app.core.embeddings import get_embedding
 from app.core.logging_config import get_logger
 from app.db.repository_news import signal_exists_by_url, insert_signal

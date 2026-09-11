@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.core.embeddings import get_embedding
 from app.core.logging_config import get_logger
-from app.config import BLOG_FEEDS
+from app.core.sources import BLOG_FEEDS
 from app.db.repository_news import signal_exists_by_url, insert_signal
 from app.db.session_news import get_news_session
 from app.filters.content_fetcher import fetch_full_content

@@ -22,7 +22,10 @@ beautifulsoup4==4.12.3
 # LLM + agent orchestration + observability
 anthropic==0.34.2
 langgraph==0.2.28
-langsmith==0.1.129
+# 0.3.15 is the first release exposing langsmith.wrappers.wrap_anthropic,
+# which core/llm_client.py imports. Capped below 0.4 by langchain-core
+# (pulled in via langgraph==0.2.28), which requires langsmith<0.4.
+langsmith==0.3.15
 
 # Embeddings
 voyageai==0.2.3
