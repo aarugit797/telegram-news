@@ -1,6 +1,11 @@
 # Web framework (async responder)
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
+# Required for request.form() in responder/webhook.py - Twilio posts
+# application/x-www-form-urlencoded, and Starlette refuses to parse any
+# form body without this installed. Missing it meant every webhook call
+# would have failed in production, not just in tests.
+python-multipart==0.0.9
 
 # Database
 sqlalchemy==2.0.35
