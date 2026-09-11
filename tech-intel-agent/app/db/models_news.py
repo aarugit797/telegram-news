@@ -1,10 +1,12 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import String, Text, Float, Integer, Boolean, DateTime, ForeignKey, ARRAY
+from sqlalchemy import String, Text, Float, Integer, Boolean, Date, DateTime, ForeignKey, ARRAY
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from pgvector.sqlalchemy import Vector
+
+from app.core.time import utcnow
 
 
 class Base(DeclarativeBase):
@@ -40,13 +42,13 @@ class Signal(Base):
     composite_score: Mapped[float] = mapped_column(Float)
     filter_justification: Mapped[str] = mapped_column(Text)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
 
     is_sent: Mapped[bool] = mapped_column(Boolean, default=False)
-    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     batch_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("batches.id"), nullable=True
     )
@@ -68,8 +70,8 @@ class Batch(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     user_count: Mapped[int] = mapped_column(Integer, default=0)
     signal_ids: Mapped[list[uuid.UUID]] = mapped_column(ARRAY(UUID(as_uuid=True)))
     delivery_status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | delivered | failed
@@ -88,7 +90,10 @@ class DailyStat(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
 
-    date: Mapped[datetime] = mapped_column(DateTime)
+    # A calendar day, not an instant - so Date, not a timestamp. Storing
+    # a day as timestamptz would make "which day is this?" depend on the
+    # reader's session timezone.
+    date: Mapped[date] = mapped_column(Date)
     source: Mapped[str] = mapped_column(String(50))
 
     signals_fetched: Mapped[int] = mapped_column(Integer, default=0)

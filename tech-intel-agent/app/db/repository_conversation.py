@@ -1,6 +1,8 @@
 import uuid
 from datetime import datetime, date
 
+from app.core.time import utcnow
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -70,7 +72,7 @@ async def increment_daily_message_count(session: AsyncSession, user_id: uuid.UUI
     user = result.scalar_one_or_none()
     if user:
         user.daily_message_count += 1
-        user.last_active_at = datetime.utcnow()
+        user.last_active_at = utcnow()
         await session.commit()
 
 

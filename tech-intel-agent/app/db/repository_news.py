@@ -1,6 +1,8 @@
 import uuid
 from datetime import datetime
 
+from app.core.time import utcnow
+
 from sqlalchemy import select, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -65,7 +67,7 @@ async def mark_signals_as_sent(
     await session.execute(
         update(Signal)
         .where(Signal.id.in_(signal_ids))
-        .values(is_sent=True, sent_at=datetime.utcnow(), batch_id=batch_id)
+        .values(is_sent=True, sent_at=utcnow(), batch_id=batch_id)
     )
     await session.commit()
 
@@ -187,5 +189,5 @@ async def update_batch_delivery(
     if batch:
         batch.user_count = user_count
         batch.delivery_status = delivery_status
-        batch.sent_at = datetime.utcnow()
+        batch.sent_at = utcnow()
         await session.commit()

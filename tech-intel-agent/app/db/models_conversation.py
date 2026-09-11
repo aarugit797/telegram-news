@@ -1,9 +1,11 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import String, Text, Float, Integer, Boolean, DateTime, ForeignKey
+from sqlalchemy import String, Text, Float, Integer, Boolean, Date, DateTime, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from app.core.time import utcnow
 
 
 class Base(DeclarativeBase):
@@ -32,12 +34,12 @@ class User(Base):
     whatsapp_number: Mapped[str] = mapped_column(String(20), unique=True)
     display_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
-    registered_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    registered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_whitelisted: Mapped[bool] = mapped_column(Boolean, default=False)
 
     daily_message_count: Mapped[int] = mapped_column(Integer, default=0)
-    last_active_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Message(Base):
@@ -70,7 +72,7 @@ class Message(Base):
     tokens_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
     estimated_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
 
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
@@ -89,10 +91,10 @@ class Summary(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     summary_text: Mapped[str] = mapped_column(Text)
 
-    covers_from: Mapped[datetime] = mapped_column(DateTime)   # earliest message this summary represents
-    covers_to: Mapped[datetime] = mapped_column(DateTime)     # latest message this summary represents
+    covers_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))   # earliest message this summary represents
+    covers_to: Mapped[datetime] = mapped_column(DateTime(timezone=True))     # latest message this summary represents
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class DailyCost(Base):
@@ -107,7 +109,10 @@ class DailyCost(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
 
-    date: Mapped[datetime] = mapped_column(DateTime)
+    # A calendar day, not an instant. cost_tracker.py queries this with
+    # date.today(), so Date matches exactly instead of relying on
+    # Postgres coercing a date to midnight in the session timezone.
+    date: Mapped[date] = mapped_column(Date)
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
 
     llm_calls: Mapped[int] = mapped_column(Integer, default=0)
