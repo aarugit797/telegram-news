@@ -28,7 +28,10 @@ class Settings(BaseSettings):
     tavily_api_key: str = ""
 
     github_token: str = ""
-    github_trending_api_base: str = "https://api.gitterapp.com/repositories"
+    # GitHub's own trending page. The previous value here was a
+    # third-party JSON wrapper (api.gitterapp.com) which now 404s on
+    # every path - see _fetch_trending_repos for why we scrape HTML.
+    github_trending_base: str = "https://github.com/trending"
 
     
     langchain_api_key: str = ""

@@ -1,4 +1,8 @@
+import re
+from urllib.parse import quote
+
 import httpx
+from bs4 import BeautifulSoup
 
 from app.core.config import settings
 from app.core.embeddings import get_embedding
@@ -32,23 +36,80 @@ def _rules_check(repo_data: dict) -> bool:
     return repo_data.get("currentPeriodStars", 0) >= STARS_TODAY_THRESHOLD
 
 
+def _first_int(text: str) -> int:
+    """'1,234 stars today' -> 1234. Returns 0 when there is no number,
+    which is the correct reading for a repo with no stars in the period."""
+    match = re.search(r"[\d,]+", text or "")
+    return int(match.group().replace(",", "")) if match else 0
+
+
+def _parse_trending_html(html: str) -> list[dict]:
+    """
+    Turns one trending page into the same dict shape the rest of this
+    agent already expects - notably `currentPeriodStars`, which
+    _rules_check reads. Keeping the old key names means nothing
+    downstream of the fetch had to change.
+
+    Each repo is one <article class="Box-row">. A missing sub-element
+    yields a falsy default rather than raising, so one malformed row
+    cannot lose the other nineteen on the page.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    repos: list[dict] = []
+
+    for article in soup.select("article.Box-row"):
+        heading = article.select_one("h2 a")
+        if heading is None or not heading.get("href"):
+            continue
+
+        owner_repo = heading["href"].strip("/")
+        description = article.select_one("p")
+        language = article.select_one('[itemprop="programmingLanguage"]')
+        total_stars = article.select_one('a[href$="/stargazers"]')
+        # The "N stars today" figure sits in its own right-floated span.
+        period_stars = article.select_one("span.d-inline-block.float-sm-right")
+
+        repos.append({
+            "name": owner_repo,
+            "url": f"https://github.com/{owner_repo}",
+            "language": language.get_text(strip=True) if language else None,
+            "stars": _first_int(total_stars.get_text() if total_stars else ""),
+            "currentPeriodStars": _first_int(period_stars.get_text() if period_stars else ""),
+            "description": description.get_text(strip=True) if description else "",
+        })
+
+    return repos
+
+
 async def _fetch_trending_repos() -> list[dict]:
     """
-    Calls the unofficial GitHub trending JSON wrapper once per
-    target language. GitHub itself has no official trending API -
-    this is a real reliability dependency on a third-party service,
-    not something we control or can guarantee stays available.
+    Scrapes GitHub's own trending page once per target language.
+
+    GitHub has no official trending API. This previously called a
+    third-party JSON wrapper (api.gitterapp.com), which now returns
+    404 on every path - so the agent silently fetched nothing while
+    still reporting a successful run. Reading GitHub's own page
+    removes the dependency on a third party staying alive, at the
+    cost of depending on their markup instead: if GitHub restructures
+    the page, _parse_trending_html returns an empty list rather than
+    raising, so watch the `fetched` count in the completion log.
+
+    A browser User-Agent is sent because GitHub serves a reduced or
+    blocked response to some default client identifiers.
     """
     all_repos: list[dict] = []
-    async with httpx.AsyncClient(timeout=10.0) as http_client:
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; tech-intel-agent/1.0)"}
+
+    async with httpx.AsyncClient(timeout=20.0, headers=headers, follow_redirects=True) as http_client:
         for language in TARGET_LANGUAGES:
             try:
+                # quote() because "c++" would otherwise be mangled in the path.
                 response = await http_client.get(
-                    settings.github_trending_api_base,
-                    params={"language": language, "since": "daily"},
+                    f"{settings.github_trending_base}/{quote(language, safe='')}",
+                    params={"since": "daily"},
                 )
                 response.raise_for_status()
-                all_repos.extend(response.json())
+                all_repos.extend(_parse_trending_html(response.text))
             except Exception as e:
                 # One language's fetch failing shouldn't block the
                 # rest - log and keep going.
