@@ -15,6 +15,14 @@ pgvector==0.3.5
 
 # Scheduling
 apscheduler==3.10.4
+# The IANA timezone database, backing settings.scheduler_timezone
+# ("Asia/Kolkata") which every CronTrigger in agents/scheduler.py is
+# anchored to. It was already present, but only transitively via
+# apscheduler's tzlocal - pinned explicitly because some slim container
+# images ship no system tz database, and if that transitive pull ever
+# goes away the timezone fails to resolve at STARTUP, taking the whole
+# pipeline process down rather than just one job.
+tzdata==2026.3
 
 # Redis
 redis==5.0.8

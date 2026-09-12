@@ -38,7 +38,14 @@ class Settings(BaseSettings):
     langchain_tracing_v2: bool = False
     langchain_project: str = "tech-intel-agent"
     sentry_dsn: str = ""
-    environment: str = "local"   
+    environment: str = "local"
+
+    # The timezone every CronTrigger in agents/scheduler.py is anchored
+    # to. Without an explicit value APScheduler falls back to the
+    # SERVER's local time, so "8am" would mean one thing on a laptop
+    # and another on an EC2 box running UTC - the jobs would silently
+    # fire at different real-world times per deployment.
+    scheduler_timezone: str = "Asia/Kolkata"
 
     model_config = SettingsConfigDict(
         env_file=".env",
