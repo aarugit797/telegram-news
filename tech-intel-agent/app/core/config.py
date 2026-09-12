@@ -13,10 +13,21 @@ class Settings(BaseSettings):
     database_url: str                    # News DB
     conversation_database_url: str       # Conversation DB - separate database entirely
     redis_url: str
-    anthropic_api_key: str
+    gemini_api_key: str
 
-
-    default_llm_model: str = "claude-haiku-4-5-20251001"
+    # Google AI Studio free tier. Taken from models.list rather than
+    # assumed, then picked on measured availability: gemini-3.8-flash
+    # is newer but returned 503 UNAVAILABLE ("high demand") on 1 of 3
+    # structured calls, while 3.5-flash served 3 of 3. An agent run
+    # that dies partway through on a transient 503 is worse than one
+    # using a slightly older model.
+    #
+    # Deliberately NOT the "gemini-flash-latest" alias: this model
+    # scores signals against fixed numeric thresholds
+    # (hybrid_filter.COMPOSITE_THRESHOLD), so a model changing
+    # underneath us would shift those scores with no code change and no
+    # way to attribute the drift.
+    default_llm_model: str = "gemini-3.5-flash"
     llm_timeout_seconds: float = 20.0
 
     twilio_account_sid: str = ""
