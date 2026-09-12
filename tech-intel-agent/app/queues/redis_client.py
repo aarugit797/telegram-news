@@ -1,15 +1,49 @@
 import json
+from urllib.parse import urlsplit, urlunsplit
+
 import redis.asyncio as redis
 
 from app.core.config import settings
+
+
+def _client_for_db(db: int) -> redis.Redis:
+    """
+    Builds a client pinned to a specific logical database.
+
+    Why this exists instead of redis.from_url(url, db=N): redis-py
+    parses the URL and then lets the parsed options OVERRIDE the
+    keyword arguments, not the other way round. Our REDIS_URL ends in
+    "/0", so that "0" silently won every time and all three clients
+    below landed on db 0 - no error, no warning. The namespacing this
+    module documents simply was not happening, and a FLUSHDB on what
+    looked like the cache would have taken the signal queue and dead
+    letter queue with it.
+
+    The fix is to remove the only part of the URL that conflicts - the
+    path - and pass db explicitly. Stripping the path is deliberately
+    preferred over parsing out host/port and rebuilding the client
+    from scratch: everything else the URL can carry (password, the
+    rediss:// TLS scheme, query parameters) survives untouched, where
+    a host/port reconstruction would quietly drop them.
+
+    The path is only stripped for redis:// and rediss:// URLs. For a
+    unix:// socket URL the path IS the socket location, so removing it
+    would break the connection rather than fix it.
+    """
+    url = settings.redis_url
+    parts = urlsplit(url)
+    if parts.scheme in ("redis", "rediss"):
+        url = urlunsplit(parts._replace(path=""))
+    return redis.from_url(url, db=db, decode_responses=True)
+
 
 # Redis supports multiple logical databases (0-15) on one instance -
 # this is namespacing WITHIN one Redis process, not physical
 # separation. DB 0 = signal queue, DB 1 = dead letter queue, DB 2 =
 # cache/rate-limiting (used later by the responder).
-_signal_queue_client = redis.from_url(settings.redis_url, db=0, decode_responses=True)
-_dead_letter_client = redis.from_url(settings.redis_url, db=1, decode_responses=True)
-_cache_client = redis.from_url(settings.redis_url, db=2, decode_responses=True)
+_signal_queue_client = _client_for_db(0)
+_dead_letter_client = _client_for_db(1)
+_cache_client = _client_for_db(2)
 
 SIGNAL_QUEUE_KEY = "signal_queue"
 DEAD_LETTER_KEY = "dead_letter_queue"
