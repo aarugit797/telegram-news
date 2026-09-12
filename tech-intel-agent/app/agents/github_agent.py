@@ -7,7 +7,12 @@ from bs4 import BeautifulSoup
 from app.core.config import settings
 from app.core.embeddings import get_embedding
 from app.core.logging_config import get_logger
-from app.db.repository_news import signal_exists_by_url, insert_signal
+from app.db.repository_news import (
+    signal_exists_by_url,
+    insert_signal,
+    insert_rejected_signal,
+    url_was_rejected,
+)
 from app.db.session_news import get_news_session
 from app.filters.content_fetcher import fetch_full_content
 from app.filters.hybrid_filter import run_hybrid_filter
@@ -134,7 +139,7 @@ async def run_github_agent() -> None:
     repos = await _fetch_trending_repos()
 
     counts = {
-        "fetched": len(repos), "skipped_duplicate": 0,
+        "fetched": len(repos), "skipped_duplicate": 0, "skipped_rejected": 0,
         "rejected_rules": 0, "rejected_llm": 0, "approved": 0, "errors": 0,
     }
 
@@ -147,6 +152,14 @@ async def run_github_agent() -> None:
 
                 if await signal_exists_by_url(session, repo_url):
                     counts["skipped_duplicate"] += 1
+                    continue
+
+                # Second cache, same purpose as the check above but for
+                # items the LLM already judged and rejected - without it
+                # anything still in the source listing is re-scored, and
+                # paid for, on every run.
+                if await url_was_rejected(session, repo_url):
+                    counts["skipped_rejected"] += 1
                     continue
 
                 filter_result = await run_hybrid_filter(
@@ -165,6 +178,16 @@ async def run_github_agent() -> None:
                 )
 
                 if not filter_result.passed:
+                    # Only cache LLM-stage rejections. A rules-stage
+                    # rejection never reached the LLM, so re-judging it
+                    # next run costs nothing and needs no row.
+                    if filter_result.stage_reached == "rejected_by_llm":
+                        await insert_rejected_signal(session, {
+                            "url": repo_url,
+                            "source": "github",
+                            "composite_score": filter_result.composite_score,
+                            "filter_justification": filter_result.justification or "",
+                        })
                     key = "rejected_rules" if filter_result.stage_reached == "rejected_by_rules" else "rejected_llm"
                     counts[key] += 1
                     continue

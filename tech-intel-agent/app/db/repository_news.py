@@ -3,10 +3,10 @@ from datetime import datetime
 
 from app.core.time import utcnow
 
-from sqlalchemy import select, update, delete
+from sqlalchemy import select, update, delete, exists
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models_news import Signal, Batch
+from app.db.models_news import Signal, Batch, RejectedSignal
 
 
 async def insert_signal(session: AsyncSession, signal_data: dict) -> Signal:
@@ -39,6 +39,46 @@ async def signal_exists_by_url(session: AsyncSession, url: str) -> bool:
         select(Signal).where(Signal.url == url, Signal.is_deleted == False)  # noqa: E712
     )
     return result.scalar_one_or_none() is not None
+
+
+async def insert_rejected_signal(session: AsyncSession, rejected_data: dict) -> None:
+    """
+    Records a url the LLM filter stage rejected, so the next run can
+    skip it without paying for a second identical judgment. Called by
+    all 5 agents, but ONLY on stage_reached == "rejected_by_llm" - a
+    rules-stage rejection never reached the LLM and so costs nothing
+    to repeat.
+
+    Returns None rather than the row: nothing downstream needs the
+    object back, and not refreshing saves a round trip on what is the
+    most frequent write in the pipeline.
+    """
+    session.add(RejectedSignal(**rejected_data))
+    await session.commit()
+
+
+async def url_was_rejected(session: AsyncSession, url: str) -> bool:
+    """
+    The read side of the rejection cache. Runs on EVERY item of every
+    run, immediately after signal_exists_by_url, so it is deliberately
+    an EXISTS subquery: Postgres stops at the first matching index
+    entry and returns a boolean, instead of materialising a full row
+    that would be discarded. At this call frequency that difference is
+    the whole point of the function.
+
+    Filters is_deleted == False to match the cleanup policy - once an
+    entry has been soft-deleted the url becomes eligible for scoring
+    again, which is what lets a re-judged item back in after 30 days.
+    """
+    result = await session.execute(
+        select(
+            exists().where(
+                RejectedSignal.url == url,
+                RejectedSignal.is_deleted == False,  # noqa: E712
+            )
+        )
+    )
+    return bool(result.scalar())
 
 
 async def get_unsent_signals(session: AsyncSession) -> list[Signal]:
@@ -170,6 +210,37 @@ async def hard_delete_old_signals(session: AsyncSession, older_than: datetime) -
     """
     result = await session.execute(
         delete(Signal).where(Signal.created_at < older_than, Signal.is_deleted == True)  # noqa: E712
+    )
+    await session.commit()
+    return result.rowcount
+
+
+async def soft_delete_old_rejected_signals(session: AsyncSession, older_than: datetime) -> int:
+    """
+    Weekly cleanup, mirroring soft_delete_old_signals. Expiring the
+    cache matters as much as filling it: a repo rejected a year ago
+    under an older prompt or threshold should eventually be reconsidered
+    rather than excluded forever by a stale judgment.
+    """
+    result = await session.execute(
+        update(RejectedSignal)
+        .where(RejectedSignal.rejected_at < older_than, RejectedSignal.is_deleted == False)  # noqa: E712
+        .values(is_deleted=True)
+    )
+    await session.commit()
+    return result.rowcount
+
+
+async def hard_delete_old_rejected_signals(session: AsyncSession, older_than: datetime) -> int:
+    """
+    Permanently removes rejection cache entries that are ALREADY
+    soft-deleted, mirroring hard_delete_old_signals - never deleting in
+    one step something that has not passed through soft delete first.
+    """
+    result = await session.execute(
+        delete(RejectedSignal).where(
+            RejectedSignal.rejected_at < older_than, RejectedSignal.is_deleted == True  # noqa: E712
+        )
     )
     await session.commit()
     return result.rowcount

@@ -142,6 +142,69 @@ class Batch(Base):
     delivery_status: Mapped[str] = mapped_column(String(20), default="pending", server_default=text("'pending'"))  # pending | delivered | failed
 
 
+class RejectedSignal(Base):
+    """
+    One row = one url the LLM filter stage scored BELOW the composite
+    threshold. This is a cache, not a record of content - we keep only
+    enough to recognise the url again and to explain the decision.
+
+    Why it exists: signal_exists_by_url only finds APPROVED signals,
+    because rejected ones were never written anywhere. An item that
+    stays in its source's listing - a repo trending for days, a
+    HackerNews story on the front page - was therefore re-fetched and
+    re-scored on every single run. With the GitHub agent on a 2-hour
+    cadence that is ~12 LLM calls per day per rejected repo, and most
+    candidates are rejected, which made this the largest single source
+    of LLM spend in the system.
+
+    ONLY llm-stage rejections belong here. A rules-stage rejection
+    costs nothing - run_hybrid_filter returns before any LLM call is
+    made - so caching those would add rows and a lookup to save
+    nothing.
+    """
+    __tablename__ = "rejected_signals"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+
+    url: Mapped[str] = mapped_column(String(1000))
+    source: Mapped[str] = mapped_column(String(50))
+
+    # Kept so a threshold change can be reasoned about after the fact -
+    # "how many cached rejections scored just under the line?" - rather
+    # than only knowing that something was rejected.
+    composite_score: Mapped[float] = mapped_column(Float)
+    filter_justification: Mapped[str] = mapped_column(Text)
+
+    rejected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=text("now()")
+    )
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+
+    __table_args__ = (
+        # UNIQUE so a concurrent double-rejection cannot write two rows
+        # for one url, and it doubles as the index url_was_rejected
+        # looks the url up by on every item of every run.
+        #
+        # PARTIAL on is_deleted = false for the same reason
+        # ix_signals_url is: cleanup_job soft-deletes these after 30
+        # days, url_was_rejected ignores soft-deleted rows, so a url
+        # rejected again after its cache entry expired legitimately
+        # needs a second row. A plain UNIQUE would raise IntegrityError
+        # on that insert instead.
+        Index(
+            "ix_rejected_signals_url",
+            "url",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+    )
+
+
 class DailyStat(Base):
     """
     One row = one source's performance summary for one calendar day.
