@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import String, Text, Float, Integer, Boolean, Date, DateTime, ForeignKey, text
+from sqlalchemy import String, Text, Float, Integer, Boolean, Date, DateTime, ForeignKey, Index, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -91,6 +91,15 @@ class Message(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, server_default=text("now()"))
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
 
+    __table_args__ = (
+        # get_recent_messages runs on EVERY inbound message - it filters
+        # user_id, then sorts by timestamp descending to take the last N
+        # for the token budget. Leading with user_id narrows to one
+        # conversation first; timestamp second lets Postgres walk the
+        # index backwards for the ORDER BY instead of sorting the rows.
+        Index("ix_messages_user_timestamp", "user_id", "timestamp"),
+    )
+
 
 class Summary(Base):
     """
@@ -150,3 +159,20 @@ class DailyCost(Base):
     llm_calls: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     total_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0.0, server_default=text("0"))
+
+    __table_args__ = (
+        # (user_id, date) is this table's real identity - one row per
+        # user per day. increment_daily_cost does a check-then-insert,
+        # so two concurrent LLM calls for the same user can both miss
+        # and both insert, splitting the day's spend across two rows and
+        # letting the $0.50 cap be silently exceeded. UNIQUE makes the
+        # database refuse the second insert rather than trusting timing.
+        #
+        # It also protects the read: get_daily_cost uses
+        # scalar_one_or_none(), which raises MultipleResultsFound the
+        # moment a duplicate pair exists.
+        #
+        # Doubles as the lookup index for both of those queries - a
+        # UNIQUE constraint is backed by a btree on the same columns.
+        UniqueConstraint("user_id", "date", name="uq_daily_costs_user_date"),
+    )

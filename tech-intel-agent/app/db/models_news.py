@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import String, Text, Float, Integer, Boolean, Date, DateTime, ForeignKey, ARRAY, text
+from sqlalchemy import String, Text, Float, Integer, Boolean, Date, DateTime, ForeignKey, ARRAY, Index, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from pgvector.sqlalchemy import Vector
@@ -40,6 +40,10 @@ class Signal(Base):
 
     source: Mapped[str] = mapped_column(String(50))          # "github" | "hackernews" | "arxiv" | "blogs" | "rss"
     title: Mapped[str] = mapped_column(String(500))
+    # Indexed via ix_signals_url in __table_args__ below - a partial
+    # UNIQUE index rather than index=True, so the database itself
+    # rejects a duplicate live url instead of trusting the
+    # check-then-insert in signal_exists_by_url to win every race.
     url: Mapped[str] = mapped_column(String(1000))
     full_content: Mapped[str] = mapped_column(Text)           # full README / abstract / post text
     summary: Mapped[str] = mapped_column(Text)                 # one-line plain English summary
@@ -68,6 +72,48 @@ class Signal(Base):
 
     # 1024 matches Voyage AI's voyage-3 embedding output dimension.
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1024), nullable=True)
+
+    __table_args__ = (
+        # UNIQUE, so two agents running concurrently cannot both pass the
+        # signal_exists_by_url check and both insert the same url - the
+        # second INSERT is refused by the database rather than by timing.
+        #
+        # PARTIAL on is_deleted = false for two reasons. It matches the
+        # predicate signal_exists_by_url actually queries with, and a
+        # plain UNIQUE(url) would break the re-fetch path: the weekly job
+        # soft-deletes old rows, signal_exists_by_url ignores those, so a
+        # still-trending repo legitimately gets a second row with the
+        # same url. Scoping uniqueness to live rows allows that while
+        # still forbidding two live duplicates.
+        Index(
+            "ix_signals_url",
+            "url",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        # get_unsent_signals runs every 30 minutes and filters on exactly
+        # these two columns together.
+        Index("ix_signals_unsent", "is_sent", "is_deleted"),
+        # Without this, search_signals_by_embedding does an exact scan -
+        # every row's vector compared against the query vector, one at a
+        # time - so RAG latency grows linearly with the table forever.
+        #
+        # HNSW not IVFFlat: IVFFlat computes its centroid lists from the
+        # rows present at BUILD time, so building one now (empty table)
+        # would produce a useless index. HNSW builds incrementally and is
+        # correct to create before any data exists.
+        #
+        # vector_cosine_ops must match the operator the query uses -
+        # search_signals_by_embedding calls .cosine_distance() (<=>).
+        # An opclass mismatch does not error, it silently leaves the
+        # index unused.
+        Index(
+            "ix_signals_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )
 
 
 class Batch(Base):
