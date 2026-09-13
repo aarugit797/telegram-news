@@ -48,7 +48,17 @@ def _fit(value: str | None, limit: int) -> str:
     text = (value or "").strip()
     return text[:limit]
 
-LOOKBACK_HOURS = 1  # matches this agent's own 30-minute schedule, with buffer
+# The lookback MUST exceed this agent's scheduler interval, or anything
+# published between the cutoff and the previous run is never seen again.
+#
+# It was a bare `LOOKBACK_HOURS = 1` whose comment claimed it matched a
+# 30-minute schedule. The scheduler had since moved to 2 hours, so every
+# run looked back 1 hour over a 2-hour gap and silently dropped roughly
+# half of all lab-blog posts. Deriving it from the interval means the two
+# cannot drift apart the same way again.
+RUN_INTERVAL_HOURS = 2      # must match agents/scheduler.py's blogs_agent job
+LOOKBACK_BUFFER_HOURS = 1   # covers a late, delayed or slow-starting run
+LOOKBACK_HOURS = RUN_INTERVAL_HOURS + LOOKBACK_BUFFER_HOURS
 
 
 def _rules_check(_: dict) -> bool:
@@ -64,7 +74,12 @@ async def _fetch_blog_posts() -> list[dict]:
     posts: list[dict] = []
     cutoff = datetime.now(timezone.utc) - timedelta(hours=LOOKBACK_HOURS)
 
-    async with httpx.AsyncClient(timeout=15.0) as http_client:
+    # follow_redirects is load-bearing, not hygiene: Google DeepMind's
+    # feed 302s and Latent.Space's 301s, and raise_for_status() does
+    # NOT fire on a 3xx. Without this, feedparser parsed the redirect
+    # stub, returned zero entries, and the run logged cleanly - two of
+    # six feeds contributing nothing with no error anywhere.
+    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as http_client:
         for lab_name, feed_url in BLOG_FEEDS.items():
             try:
                 response = await http_client.get(feed_url)

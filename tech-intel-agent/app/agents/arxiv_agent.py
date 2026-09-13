@@ -1,3 +1,6 @@
+import asyncio
+import random
+
 import feedparser
 import httpx
 from datetime import datetime, timedelta, timezone
@@ -50,7 +53,19 @@ def _fit(value: str | None, limit: int) -> str:
 CATEGORIES = ["cs.AI", "cs.LG", "cs.CL", "cs.CV"]
 MAX_RESULTS = 50
 ABSTRACT_WORD_THRESHOLD = 150
-LOOKBACK_HOURS = 24  # matches this agent's own once-daily schedule
+# Derived from the schedule, with a buffer this previously lacked. At
+# exactly 24h over a 24h cadence there is no slack at all: a run that
+# starts even a minute late has a cutoff past the previous run's, and
+# papers submitted in that sliver are never seen again.
+RUN_INTERVAL_HOURS = 24     # must match agents/scheduler.py's arxiv_agent job
+LOOKBACK_BUFFER_HOURS = 1   # covers a late, delayed or slow-starting run
+LOOKBACK_HOURS = RUN_INTERVAL_HOURS + LOOKBACK_BUFFER_HOURS
+
+# arXiv's API terms ask for a descriptive User-Agent identifying the
+# client; the default was python-httpx/0.28.1.
+USER_AGENT = "tech-intel-agent/1.0 (+https://github.com/aarugit797/whatsapp-news)"
+FETCH_ATTEMPTS = 3
+BACKOFF_BASE_SECONDS = 5.0
 
 
 def _rules_check(paper: dict) -> bool:
@@ -73,13 +88,66 @@ async def _fetch_new_papers() -> list[dict]:
         "max_results": MAX_RESULTS,
     }
 
-    async with httpx.AsyncClient(timeout=15.0) as http_client:
-        try:
-            response = await http_client.get(ARXIV_API_URL, params=params)
-            response.raise_for_status()
-        except Exception as e:
-            logger.warning("Failed to fetch arXiv listing", extra={"extra_fields": {"error": str(e)}})
-            return []
+    response = None
+    last_error = None
+
+    async with httpx.AsyncClient(
+        timeout=15.0, follow_redirects=True, headers={"User-Agent": USER_AGENT}
+    ) as http_client:
+        for attempt in range(FETCH_ATTEMPTS):
+            try:
+                response = await http_client.get(ARXIV_API_URL, params=params)
+                response.raise_for_status()
+                break
+            except Exception as e:
+                last_error = e
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                retryable = status is None or status == 429 or status >= 500
+
+                if not retryable or attempt == FETCH_ATTEMPTS - 1:
+                    break
+
+                # Prefer the server's own Retry-After over a guess.
+                hinted = None
+                headers = getattr(getattr(e, "response", None), "headers", None)
+                if headers:
+                    raw = headers.get("Retry-After") or headers.get("retry-after")
+                    try:
+                        hinted = float(raw) if raw else None
+                    except (TypeError, ValueError):
+                        hinted = None
+
+                delay = hinted if hinted is not None else random.uniform(
+                    0, BACKOFF_BASE_SECONDS * (2 ** attempt)
+                )
+                logger.warning(
+                    "arXiv fetch failed, retrying",
+                    extra={"extra_fields": {
+                        "attempt": attempt + 1, "of": FETCH_ATTEMPTS,
+                        "status": status, "sleep_seconds": round(delay, 1),
+                        "error": str(e)[:200],
+                    }},
+                )
+                await asyncio.sleep(delay)
+
+    if response is None or response.is_error:
+        # ERROR, not warning, and deliberately distinguished from "no new
+        # papers today". This agent runs ONCE A DAY: a swallowed failure
+        # costs a full day with no retry and nothing to alarm on, and
+        # {"fetched": 0} from a 429 is indistinguishable from a genuinely
+        # quiet day. Raising the level is what puts it in front of Sentry.
+        status = getattr(response, "status_code", None) if response is not None else None
+        logger.error(
+            "arXiv fetch FAILED - this run produced no papers because the "
+            "source was unreachable, NOT because there were none",
+            extra={"extra_fields": {
+                "status": status,
+                "attempts": FETCH_ATTEMPTS,
+                "error": str(last_error)[:300] if last_error else None,
+                "body_preview": (response.text[:200] if response is not None else None),
+            }},
+        )
+        return []
 
     feed = feedparser.parse(response.text)
     cutoff = datetime.now(timezone.utc) - timedelta(hours=LOOKBACK_HOURS)

@@ -20,7 +20,13 @@ ARXIV_API_URL = "https://export.arxiv.org/api/query"
 BLOG_FEEDS = {
     "Anthropic": "https://rsshub.bestblogs.dev/anthropic/news",
     "OpenAI": "https://openai.com/news/rss.xml",
-    "Google DeepMind": "https://deepmind.google/blog/feed/basic/",
+    # Final destination, not the /feed/basic/ URL that 302s to it. The
+    # redirect was silently costing this feed entirely: without
+    # follow_redirects the agent parsed the redirect stub and saw 0
+    # entries, and raise_for_status() does not fire on a 3xx, so the
+    # run logged as successful. Points here so the hop is not paid on
+    # every run even now that redirects are followed.
+    "Google DeepMind": "https://deepmind.google/blog/rss.xml",
     "Hugging Face": "https://huggingface.co/blog/feed.xml",
 }
 
@@ -31,5 +37,7 @@ BLOG_FEEDS = {
 # Verify a feed actually parses before adding it.
 NEWSLETTER_FEEDS = {
     "Simon Willison": "https://simonwillison.net/atom/everything/",
-    "Latent.Space": "https://latent.space/feed",
+    # Final destination - the apex domain 301s to www. Same silent
+    # zero-entry failure as Google DeepMind above.
+    "Latent.Space": "https://www.latent.space/feed",
 }

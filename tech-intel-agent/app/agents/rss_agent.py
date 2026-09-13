@@ -48,7 +48,13 @@ def _fit(value: str | None, limit: int) -> str:
     text = (value or "").strip()
     return text[:limit]
 
-LOOKBACK_HOURS = 25  # matches this agent's own once-daily schedule, with buffer
+# Derived from the schedule rather than hardcoded, for the reason
+# blogs_agent documents: a standalone constant drifts when the scheduler
+# changes and the gap is invisible - items simply stop being seen.
+# The resulting 25h is unchanged; only its provenance is.
+RUN_INTERVAL_HOURS = 24     # must match agents/scheduler.py's rss_agent job
+LOOKBACK_BUFFER_HOURS = 1   # covers a late, delayed or slow-starting run
+LOOKBACK_HOURS = RUN_INTERVAL_HOURS + LOOKBACK_BUFFER_HOURS
 
 
 def _rules_check(_: dict) -> bool:
@@ -65,7 +71,9 @@ async def _fetch_newsletter_items() -> list[dict]:
     items: list[dict] = []
     cutoff = datetime.now(timezone.utc) - timedelta(hours=LOOKBACK_HOURS)
 
-    async with httpx.AsyncClient(timeout=15.0) as http_client:
+    # See blogs_agent: a 3xx does not trip raise_for_status(), so an
+    # unfollowed redirect silently yields zero entries and a clean log.
+    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as http_client:
         for newsletter_name, feed_url in NEWSLETTER_FEEDS.items():
             try:
                 response = await http_client.get(feed_url)
