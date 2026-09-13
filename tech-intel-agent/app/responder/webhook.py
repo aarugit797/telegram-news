@@ -90,9 +90,21 @@ async def _process_message(from_number: str, message_body: str) -> None:
 
         guardrail_result = await check_guardrail(user.id, message_body)
         if guardrail_result == "INJECTION_DETECTED":
+            # Neither the phone number nor the message text is logged.
+            # LoggingIntegration turns a WARNING into a Sentry breadcrumb,
+            # so this line was shipping a user's phone number and the
+            # content of what they wrote to a third party - on the path
+            # most likely to fire repeatedly for one user.
+            #
+            # The message itself is already in the messages table, keyed
+            # by user_id, which is where it belongs and where access is
+            # controlled. user_id is enough to correlate the two.
             logger.warning(
                 "Injection attempt detected",
-                extra={"extra_fields": {"user": from_number, "message": message_body[:200]}},
+                extra={"extra_fields": {
+                    "user_id": str(user.id),
+                    "message_length": len(message_body),
+                }},
             )
             await send_whatsapp_message(from_number, FIXED_RESPONSES["injection_detected"])
             return

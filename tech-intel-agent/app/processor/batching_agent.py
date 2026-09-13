@@ -61,22 +61,41 @@ async def run_batching_agent() -> None:
 
             clusters = await deduplicate_signals(unsent_signals)
 
-            # Urgency is classified and logged per cluster representative.
-            # NOTE - true "bypass the 30-minute window" immediate sending
-            # is NOT implemented in this pass. That would need agents (or
-            # a separate lightweight trigger) to call the batching agent
-            # out-of-cycle the moment something BREAKING is found. This is
-            # a known, honest v1 simplification - BREAKING signals are
-            # still correctly classified, but currently wait for the next
-            # scheduled run like everything else.
-            urgencies = {}
-            for cluster in clusters:
-                representative = max(cluster, key=lambda s: s.composite_score)
-                urgencies[str(representative.id)] = await classify_urgency(representative)
-
             # 1. Batch row first - mark_signals_as_sent needs a real
             #    batch_id to attach, which only exists once this has run.
             batch, top_signals, signal_ids = await assemble_batch(session, clusters)
+
+            # Urgency is classified AFTER assemble_batch and only for the
+            # signals that actually made the batch - at most
+            # MAX_SIGNALS_PER_BATCH of them.
+            #
+            # NOTE - true "bypass the 30-minute window" immediate sending
+            # is still NOT implemented. That would need agents (or a
+            # separate lightweight trigger) to call the batching agent
+            # out-of-cycle the moment something BREAKING is found. The
+            # result here goes only into the completion log. Moving the
+            # call after the trim does narrow what it observes: a
+            # BREAKING signal that does not make the top three is no
+            # longer classified at all. That costs nothing today, since
+            # nothing reads the classification - but whoever implements
+            # immediate sending must move this back BEFORE the trim and
+            # bound it some other way, or reintroduce the livelock.
+            #
+            # It used to run once per CLUSTER, before the trim, and was
+            # therefore unbounded in the number of LLM calls it made. On
+            # a backlog that is self-sustaining: enough clusters to
+            # exhaust the quota means the run dies, the signals stay
+            # unsent, the backlog is unchanged, and the next run 30
+            # minutes later makes exactly the same calls and dies in the
+            # same place. Every run after that burns a full day's quota
+            # producing nothing, and no amount of waiting clears it.
+            #
+            # Classifying only the survivors caps this at 3 calls per run
+            # regardless of backlog size, so the run always reaches the
+            # send that drains it.
+            urgencies = {}
+            for signal in top_signals:
+                urgencies[str(signal.id)] = await classify_urgency(signal)
 
             # 2. The failure-prone step. If this raises, the signals below
             #    are still unsent and the next run picks them up.

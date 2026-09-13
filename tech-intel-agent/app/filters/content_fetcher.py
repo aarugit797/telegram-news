@@ -1,3 +1,7 @@
+import asyncio
+import ipaddress
+from urllib.parse import urljoin, urlparse
+
 import httpx
 from bs4 import BeautifulSoup
 
@@ -87,6 +91,79 @@ async def _fetch_github_readme(repo_url: str) -> str:
         return response.text
 
 
+# SSRF GUARD.
+#
+# The url reaching _fetch_and_extract_text comes from a HackerNews
+# submission or an RSS item - attacker-controlled in practice, since
+# anyone can submit a link to HN. Fetching it from inside our network,
+# following redirects, and then STORING the response body makes this a
+# read primitive into everything the host can reach:
+#
+#   http://169.254.169.254/latest/meta-data/iam/security-credentials/<role>
+#
+# returns temporary IAM credentials on an instance with IMDSv1 enabled.
+# Those would land in signals.full_content, be embedded, and then be
+# surfaced verbatim to any WhatsApp user whose question retrieves that
+# row. The same reachability covers RDS and ElastiCache endpoints inside
+# the VPC, which is why enforcing IMDSv2 on the instance is a necessary
+# mitigation but NOT a substitute for this one.
+_ALLOWED_SCHEMES = {"http", "https"}
+MAX_REDIRECTS = 5
+
+
+def _is_public_ip(ip: ipaddress._BaseAddress) -> bool:
+    """Anything not routable on the public internet is refused."""
+    return not (
+        ip.is_private          # 10/8, 172.16/12, 192.168/16, fc00::/7
+        or ip.is_loopback      # 127/8, ::1
+        or ip.is_link_local    # 169.254/16 - the metadata endpoint
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
+
+
+async def _assert_fetchable(url: str) -> None:
+    """
+    Rejects a url before any connection is made. Raises ValueError,
+    which fetch_full_content already catches and logs.
+
+    Every address the hostname resolves to is checked, not just the
+    first: a name with both a public and a 127.0.0.1 record would
+    otherwise pass on one lookup and connect to loopback on the next.
+
+    KNOWN LIMIT - DNS rebinding. The name is resolved here and resolved
+    again by httpx when it connects, so a record with a ~0s TTL can
+    answer public now and private a moment later. Closing that fully
+    means pinning the connection to the address validated here (connect
+    by IP, pass the original Host header), which httpx does not expose
+    cleanly. The guard below removes the trivial attack - a literal
+    metadata-IP or internal-hostname url, and any redirect into one -
+    and leaves a materially harder one.
+    """
+    parsed = urlparse(url)
+
+    if parsed.scheme not in _ALLOWED_SCHEMES:
+        # Blocks file://, gopher://, ftp:// and friends outright.
+        raise ValueError(f"refusing non-http(s) scheme: {parsed.scheme!r}")
+
+    host = parsed.hostname
+    if not host:
+        raise ValueError(f"refusing url with no host: {url[:100]!r}")
+
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(host, parsed.port or 0)
+    except Exception as e:
+        raise ValueError(f"could not resolve {host!r}: {e}") from e
+
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if not _is_public_ip(ip):
+            raise ValueError(
+                f"refusing url resolving to non-public address {ip} (host={host!r})"
+            )
+
+
 async def _fetch_and_extract_text(url: str) -> str:
     """
     Used for HackerNews (the article a post links to) and blogs/RSS
@@ -94,10 +171,33 @@ async def _fetch_and_extract_text(url: str) -> str:
     plain readable text - discarding scripts, styling, and markup
     that would otherwise add noise to both the embedding we generate
     from this text and any answer built from it later.
+
+    Redirects are followed MANUALLY, one hop at a time, because
+    follow_redirects=True performs the intermediate requests inside
+    httpx where nothing can inspect them. A public url that 302s to
+    169.254.169.254 would be fetched with the guard never seeing the
+    destination. Each hop is validated before it is requested.
     """
-    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as http_client:
-        response = await http_client.get(url)
-        response.raise_for_status()
+    current = url
+
+    async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as http_client:
+        for _ in range(MAX_REDIRECTS + 1):
+            await _assert_fetchable(current)
+            response = await http_client.get(current)
+
+            if response.is_redirect:
+                location = response.headers.get("Location")
+                if not location:
+                    raise ValueError("redirect with no Location header")
+                # Relative Locations are legal; resolve against the
+                # current url before validating.
+                current = urljoin(current, location)
+                continue
+
+            response.raise_for_status()
+            break
+        else:
+            raise ValueError(f"exceeded {MAX_REDIRECTS} redirects starting from {url[:100]!r}")
 
     soup = BeautifulSoup(response.text, "html.parser")
     for tag in soup(["script", "style"]):

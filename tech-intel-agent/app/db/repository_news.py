@@ -81,16 +81,38 @@ async def url_was_rejected(session: AsyncSession, url: str) -> bool:
     return bool(result.scalar())
 
 
-async def get_unsent_signals(session: AsyncSession) -> list[Signal]:
+async def get_unsent_signals(session: AsyncSession, limit: int = 40) -> list[Signal]:
     """
-    Used by the batching agent every 30 minutes. Returns every signal
-    that hasn't been sent yet and hasn't been soft-deleted.
+    Used by the batching agent every 30 minutes. Returns unsent,
+    un-soft-deleted signals, HIGHEST composite_score first, capped.
+
+    The cap exists because this feeds two unbounded consumers. Signals
+    that are not chosen for a batch stay unsent, so a backlog only
+    grows: deduplicate_signals then builds one prompt listing every row
+    and the batching agent classified urgency once per cluster. An
+    overnight backlog turns a 30-minute job into something that cannot
+    finish inside its own interval, and a backlog is exactly the state
+    that produces one.
+
+    Ordering by composite_score DESC rather than by age is deliberate
+    and changes nothing downstream: assemble_batch already picks the
+    top MAX_SIGNALS_PER_BATCH by composite_score, so capping on the same
+    key yields the identical batch it would have chosen from the full
+    set - it just stops loading the whole table to get there.
+
+    The tradeoff is that a large sustained backlog will starve its
+    lowest-scoring rows, which cleanup_job eventually soft-deletes. For
+    a "best three things right now" digest that is the correct outcome:
+    a week-old mediocre signal has no value once it is a week old.
     """
     result = await session.execute(
-        select(Signal).where(
+        select(Signal)
+        .where(
             Signal.is_sent == False,   # noqa: E712 - SQLAlchemy requires == not `is False` here
             Signal.is_deleted == False,
         )
+        .order_by(Signal.composite_score.desc())
+        .limit(limit)
     )
     return list(result.scalars().all())
 

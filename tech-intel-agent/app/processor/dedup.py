@@ -20,12 +20,23 @@ async def deduplicate_signals(signals: list) -> list[list]:
         for s in signals
     )
 
+    # max_tokens is set explicitly. The default of 1024 is a response
+    # cap, and this response is a nested list of UUIDs - roughly 40
+    # tokens per signal id. Past about 25 signals the reply is TRUNCATED
+    # mid-JSON, which surfaces as a parse failure rather than as
+    # "too many signals", and the safety net below then scatters every
+    # unparsed signal into its own cluster - silently undoing the
+    # deduplication this function exists to perform.
+    #
+    # get_unsent_signals caps the input at 40, so 4096 leaves clear
+    # headroom for the largest batch that can now reach here.
     result = await call_llm(
         system_prompt=DEDUP_SYSTEM_PROMPT,
         user_message=DEDUP_USER_TEMPLATE.format(signals_list=signals_list_text),
         trace_name="dedup-check",
         json_schema=DEDUP_JSON_SCHEMA,
         temperature=0.0,
+        max_tokens=4096,
     )
 
     id_to_signal = {str(s.id): s for s in signals}
