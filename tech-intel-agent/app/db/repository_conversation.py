@@ -4,6 +4,7 @@ from datetime import datetime, date
 from app.core.time import utcnow
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models_conversation import User, Message, Summary, DailyCost
@@ -135,36 +136,62 @@ async def get_latest_summary(session: AsyncSession, user_id: uuid.UUID) -> Summa
     return result.scalar_one_or_none()
 
 
-async def get_daily_cost(session: AsyncSession, user_id: uuid.UUID, day: date) -> float:
+async def get_daily_usage(session: AsyncSession, user_id: uuid.UUID, day: date) -> tuple[int, int]:
     """
-    Used by responder/cost_tracker.py before allowing an LLM call -
-    checks today's running total against the $0.50 cap.
-    """
-    result = await session.execute(
-        select(DailyCost).where(DailyCost.user_id == user_id, DailyCost.date == day)
-    )
-    record = result.scalar_one_or_none()
-    return record.estimated_cost_usd if record else 0.0
+    Today's (llm_calls, total_tokens) for this user. Used by
+    responder/cost_tracker.py before the conversational agent runs.
 
-
-async def increment_daily_cost(
-    session: AsyncSession, user_id: uuid.UUID, day: date, cost: float, tokens: int
-) -> None:
-    """
-    Called after every LLM call in the responder flow. Creates
-    today's row if it doesn't exist yet, otherwise adds to it.
+    Returns requests AND tokens because the budget is quota, not
+    dollars, and the two bind at different times: a handful of
+    long-context messages can exhaust a token allowance while barely
+    touching a request count.
     """
     result = await session.execute(
         select(DailyCost).where(DailyCost.user_id == user_id, DailyCost.date == day)
     )
     record = result.scalar_one_or_none()
     if record is None:
-        record = DailyCost(
-            user_id=user_id, date=day, llm_calls=1, total_tokens=tokens, estimated_cost_usd=cost
-        )
-        session.add(record)
-    else:
-        record.llm_calls += 1
-        record.total_tokens += tokens
-        record.estimated_cost_usd += cost
+        return 0, 0
+    return record.llm_calls, record.total_tokens
+
+
+async def increment_daily_usage(
+    session: AsyncSession, user_id: uuid.UUID, day: date, calls: int, tokens: int
+) -> None:
+    """
+    Adds one message's usage to today's row, creating it if absent.
+
+    ATOMIC, via INSERT ... ON CONFLICT DO UPDATE. The previous version
+    did read-modify-write in Python with no lock, which lost updates:
+    two of a user's messages processing concurrently would both read the
+    same starting value and both write their own total, so one
+    increment vanished - and the user could exceed a cap that looked
+    correct in the database.
+
+    The conflict target is the uq_daily_costs_user_date constraint. That
+    constraint also closes the second half of the old race: without it,
+    the two concurrent INSERTs both succeeded and left two rows for one
+    (user, date), after which get_daily_usage's scalar_one_or_none()
+    raised MultipleResultsFound on EVERY subsequent read for that user
+    that day - turning a lost increment into a hard failure.
+
+    The addition happens inside Postgres (llm_calls + excluded.llm_calls)
+    rather than in Python, so concurrent callers serialise on the row
+    lock instead of racing.
+    """
+    statement = pg_insert(DailyCost).values(
+        user_id=user_id,
+        date=day,
+        llm_calls=calls,
+        total_tokens=tokens,
+        estimated_cost_usd=0.0,
+    )
+    statement = statement.on_conflict_do_update(
+        constraint="uq_daily_costs_user_date",
+        set_={
+            "llm_calls": DailyCost.llm_calls + statement.excluded.llm_calls,
+            "total_tokens": DailyCost.total_tokens + statement.excluded.total_tokens,
+        },
+    )
+    await session.execute(statement)
     await session.commit()

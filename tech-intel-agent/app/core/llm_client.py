@@ -17,6 +17,7 @@ from groq import _exceptions as groq_errors
 
 from app.core.config import settings
 from app.core.logging_config import get_logger
+from app.core.usage_context import record_call
 from app.queues.redis_client import (
     llm_cooldown_remaining,
     llm_daily_used,
@@ -664,6 +665,15 @@ async def call_llm(
                 # the format-retry branch below handles.
                 if json_schema and isinstance(result.content, dict):
                     _validate_schema_bounds(result.content, json_schema)
+
+                # The single choke point for usage accounting. Every LLM
+                # call in the system passes through here, so no call site
+                # can silently forget to report - which is how the old
+                # record_llm_cost ended up with zero callers.
+                #
+                # No-op unless a tracking context is active, so the
+                # pipeline's agents are unaffected.
+                record_call(result.input_tokens + result.output_tokens)
 
                 logger.info(
                     "LLM call served",

@@ -66,6 +66,18 @@ class Settings(BaseSettings):
     # whole pipeline. Capping background work at 40% leaves 600 for it.
     llm_rpd_pipeline_fraction: float = 0.4
 
+    # ---- per-user daily allowance ----------------------------------------
+    # Quota, not dollars - there is no per-call price on a free tier. The
+    # scarce resource is the ~3,000 requests/day shared across every
+    # credential, of which the responder alone can take ~500.
+    #
+    # Both are enforced because they bind at different times: many short
+    # messages hit the request cap first, while a long conversation -
+    # where each turn carries a growing history - hits the token cap with
+    # a modest request count.
+    user_daily_request_limit: int = 40
+    user_daily_token_limit: int = 60_000
+
     # ---- per-credential quotas -------------------------------------------
     # Measured, not assumed: one key served 6 calls then returned 429, so
     # the real ceiling is ~5-6 RPM per project rather than the 10-15 the
