@@ -8,6 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models_news import Signal, Batch, RejectedSignal
 
+# How many unsent signals one batching run will consider. Named rather
+# than inlined so it is discoverable, and kept a parameter so a caller
+# or a test can override it without editing this file.
+DEFAULT_UNSENT_LIMIT = 40
+
 
 async def insert_signal(session: AsyncSession, signal_data: dict) -> Signal:
     """
@@ -81,7 +86,9 @@ async def url_was_rejected(session: AsyncSession, url: str) -> bool:
     return bool(result.scalar())
 
 
-async def get_unsent_signals(session: AsyncSession, limit: int = 40) -> list[Signal]:
+async def get_unsent_signals(
+    session: AsyncSession, limit: int = DEFAULT_UNSENT_LIMIT
+) -> list[Signal]:
     """
     Used by the batching agent every 30 minutes. Returns unsent,
     un-soft-deleted signals, HIGHEST composite_score first, capped.

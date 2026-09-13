@@ -1,6 +1,15 @@
 from app.core.llm_client import call_llm
 from app.prompts.processor.dedup import DEDUP_SYSTEM_PROMPT, DEDUP_USER_TEMPLATE, DEDUP_JSON_SCHEMA
 
+# Hard ceiling on how many signals go into ONE dedup prompt.
+#
+# get_unsent_signals already caps what reaches here, but this function
+# must not rely on its caller for that: it takes a list and builds a
+# prompt from all of it, so an unbounded caller means an unbounded
+# prompt and a truncated response. Enforcing the bound where the prompt
+# is actually built means the guarantee holds whoever calls it.
+MAX_SIGNALS_PER_DEDUP = 40
+
 
 async def deduplicate_signals(signals: list) -> list[list]:
     """
@@ -15,9 +24,19 @@ async def deduplicate_signals(signals: list) -> list[list]:
     if len(signals) <= 1:
         return [[s] for s in signals]
 
+    # Anything past the cap is passed through as its own cluster rather
+    # than dropped: it stays eligible for the batch, it is just not
+    # compared for duplicates this run. Losing some deduplication is a far
+    # smaller harm than losing a signal. The overflow is chosen by the same
+    # composite_score ordering the batch itself selects on, so what spills
+    # over is what was least likely to be sent anyway.
+    ranked = sorted(signals, key=lambda s: s.composite_score, reverse=True)
+    to_compare = ranked[:MAX_SIGNALS_PER_DEDUP]
+    overflow = ranked[MAX_SIGNALS_PER_DEDUP:]
+
     signals_list_text = "\n".join(
         f"id={s.id} | source={s.source} | title={s.title} | summary={s.summary}"
-        for s in signals
+        for s in to_compare
     )
 
     # max_tokens is set explicitly. The default of 1024 is a response
@@ -39,7 +58,7 @@ async def deduplicate_signals(signals: list) -> list[list]:
         max_tokens=4096,
     )
 
-    id_to_signal = {str(s.id): s for s in signals}
+    id_to_signal = {str(s.id): s for s in to_compare}
     clusters = []
     seen_ids = set()
     for cluster_ids in result.content["clusters"]:
@@ -51,8 +70,11 @@ async def deduplicate_signals(signals: list) -> list[list]:
     # Safety net - any signal the LLM's clustering somehow omitted
     # still gets included as its own cluster, rather than silently
     # disappearing from the batch entirely.
-    for s in signals:
+    for s in to_compare:
         if str(s.id) not in seen_ids:
             clusters.append([s])
+
+    # Overflow rejoins here, each signal as its own cluster.
+    clusters.extend([s] for s in overflow)
 
     return clusters

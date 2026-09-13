@@ -2,7 +2,6 @@ from app.core.logging_config import get_logger
 from app.db.repository_news import get_unsent_signals, mark_signals_as_sent
 from app.db.session_news import get_news_session
 from app.processor.dedup import deduplicate_signals
-from app.processor.urgency_classifier import classify_urgency
 from app.processor.batch_assembly import assemble_batch
 from app.processor.message_composer import compose_messages
 from app.queues.redis_client import push_dead_letter
@@ -65,37 +64,36 @@ async def run_batching_agent() -> None:
             #    batch_id to attach, which only exists once this has run.
             batch, top_signals, signal_ids = await assemble_batch(session, clusters)
 
-            # Urgency is classified AFTER assemble_batch and only for the
-            # signals that actually made the batch - at most
-            # MAX_SIGNALS_PER_BATCH of them.
+            # NO urgency classification here, deliberately.
             #
-            # NOTE - true "bypass the 30-minute window" immediate sending
-            # is still NOT implemented. That would need agents (or a
-            # separate lightweight trigger) to call the batching agent
-            # out-of-cycle the moment something BREAKING is found. The
-            # result here goes only into the completion log. Moving the
-            # call after the trim does narrow what it observes: a
-            # BREAKING signal that does not make the top three is no
-            # longer classified at all. That costs nothing today, since
-            # nothing reads the classification - but whoever implements
-            # immediate sending must move this back BEFORE the trim and
-            # bound it some other way, or reintroduce the livelock.
+            # classify_urgency used to run once per CLUSTER, before the
+            # trim, unbounded in backlog size - which was a livelock:
+            # enough clusters to exhaust the quota meant the run died,
+            # the signals stayed unsent, and the next run 30 minutes
+            # later made the same calls and died in the same place,
+            # burning a day's quota producing nothing, forever.
             #
-            # It used to run once per CLUSTER, before the trim, and was
-            # therefore unbounded in the number of LLM calls it made. On
-            # a backlog that is self-sustaining: enough clusters to
-            # exhaust the quota means the run dies, the signals stay
-            # unsent, the backlog is unchanged, and the next run 30
-            # minutes later makes exactly the same calls and dies in the
-            # same place. Every run after that burns a full day's quota
-            # producing nothing, and no amount of waiting clears it.
+            # Bounding it to the three signals that survive the trim
+            # would fix the livelock, but the call was removed entirely
+            # instead, because its only consumer is a log field. Nothing
+            # reads the result, so on a free tier it is ~3 calls a run
+            # against a budget every user shares - roughly 144 a day at
+            # this cadence - to write a string nobody acts on.
             #
-            # Classifying only the survivors caps this at 3 calls per run
-            # regardless of backlog size, so the run always reaches the
-            # send that drains it.
-            urgencies = {}
-            for signal in top_signals:
-                urgencies[str(signal.id)] = await classify_urgency(signal)
+            # The deciding argument is that bounding it does not even
+            # preserve the data usefully. PLAN.md lists "BREAKING
+            # classified but does not bypass the window" as a known
+            # deferred gap. Whenever that IS implemented, urgency has to
+            # be known BEFORE the batch is assembled - that is the whole
+            # point of bypassing the window - so a value computed after
+            # the trim is at the wrong point in the flow to inform the
+            # decision it exists for. Keeping it would pay quota now for
+            # data that still could not be used later.
+            #
+            # Reinstating it means putting it back before the trim AND
+            # bounding it some other way (a cap on clusters classified,
+            # or a cheap non-LLM heuristic as a pre-filter) - not simply
+            # deleting this comment.
 
             # 2. The failure-prone step. If this raises, the signals below
             #    are still unsent and the next run picks them up.
@@ -115,7 +113,6 @@ async def run_batching_agent() -> None:
                     "batch_id": str(batch.id),
                     "messages_composed": len(messages),
                     "signals_marked_sent": len(signal_ids),
-                    "urgencies": urgencies,
                 }},
             )
 
