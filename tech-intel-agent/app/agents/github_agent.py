@@ -26,6 +26,30 @@ from app.queues.redis_client import push_signal, push_dead_letter
 
 logger = get_logger(__name__)
 
+
+# Column widths in models_news.Signal / RejectedSignal. Values are fitted
+# to them BEFORE insert rather than after a failure, because an over-long
+# value raises StringDataRightTruncation, which the broad except below
+# swallows and dead-letters - making a systematic problem (a source that
+# always emits long titles) look like a string of unrelated transient
+# errors.
+TITLE_MAX = 500
+URL_MAX = 1000
+
+
+def _fit(value: str | None, limit: int) -> str:
+    """
+    Trims to the column width. Note the asymmetry: a trimmed TITLE is
+    still a usable title, but a trimmed URL is a broken link that will
+    404 on content fetch and will not match the real URL on a later
+    dedup check. Trimming still beats letting the insert raise - the row
+    is visible and recoverable either way - but a URL long enough to hit
+    this is pathological and worth fixing at the source rather than
+    treating as normal.
+    """
+    text = (value or "").strip()
+    return text[:limit]
+
 TARGET_LANGUAGES = [
     "python", "javascript", "typescript", "rust", "go",
     "java", "c++", "shell", "jupyter-notebook",
@@ -184,7 +208,7 @@ async def run_github_agent() -> None:
                     # next run costs nothing and needs no row.
                     if filter_result.stage_reached == "rejected_by_llm":
                         await insert_rejected_signal(session, {
-                            "url": repo_url,
+                            "url": _fit(repo_url, URL_MAX),
                             "source": "github",
                             "composite_score": filter_result.composite_score,
                             "filter_justification": filter_result.justification or "",
@@ -208,8 +232,8 @@ async def run_github_agent() -> None:
 
                 signal = await insert_signal(session, {
                     "source": "github",
-                    "title": repo.get("name", ""),
-                    "url": repo_url,
+                    "title": _fit(repo.get("name", ""), TITLE_MAX),
+                    "url": _fit(repo_url, URL_MAX),
                     "full_content": full_content,
                     "summary": summary,
                     "novelty_score": filter_result.scores["novelty"],
@@ -245,6 +269,20 @@ async def run_github_agent() -> None:
                 break
 
             except Exception as e:
+                # FIRST, before anything else touches the session.
+                # A failed commit leaves SQLAlchemy's session holding an
+                # aborted transaction it does not know about, and every
+                # later query on it raises PendingRollbackError until
+                # rollback() is called. Without this, one bad row - a
+                # duplicate url losing a race to the partial unique
+                # index, or an over-long field - turns into every
+                # REMAINING trending repo in the run failing and being
+                # dead-lettered. The per-item try/except looks like
+                # isolation but provides none without it.
+                #
+                # Each item commits independently, so this discards only
+                # the failed item's work.
+                await session.rollback()
                 counts["errors"] += 1
                 logger.error(
                     "Unexpected failure processing a trending repo",

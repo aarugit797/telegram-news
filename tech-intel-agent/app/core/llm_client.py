@@ -535,7 +535,40 @@ async def _select_credential(lane: Lane) -> tuple[Credential, str] | tuple[None,
 
 
 async def _reserve(cred: Credential, lane: Lane) -> bool:
-    """Takes one daily request and one RPM slot on this credential."""
+    """
+    Takes one RPM slot and one daily request on this credential.
+
+    ORDER MATTERS, and it is RPM first. Neither acquisition can be undone
+    - both are fire-and-forget INCRs in Redis - so whichever is taken
+    first is LEAKED when the second fails. The question is only which
+    resource can afford to leak.
+
+    Taking the daily unit first (as this did originally) leaked the
+    expensive one: RPM contention is routine and call_llm rotates on a
+    failed reserve, so the same credential could be reselected up to
+    max_rotations (len(pool) * 2 = 8) times, each attempt burning a
+    daily unit for an API call that never happened. Under sustained
+    contention that silently drains the RPD budget - the failure a user
+    would only notice as the pipeline going quiet hours early.
+
+    Taking the RPM slot first inverts which resource leaks: a slot lost
+    to a failed daily acquisition recovers in 60 seconds on its own,
+    where a daily unit does not recover until midnight. Fail fast on the
+    cheap, fast-recovering resource before consuming the expensive,
+    slow-recovering one.
+
+    The residual leak is real but bounded and self-healing: it happens
+    only when the daily budget is exhausted, which is exactly when no
+    further calls should be made on this credential anyway.
+    """
+    rpm_limit = (
+        cred.rpm_limit if lane == "responder"
+        else max(cred.rpm_limit - settings.llm_rpm_responder_reserved, 1)
+    )
+    slot_ok, _ = await try_acquire_llm_slot(cred.credential_id, rpm_limit)
+    if not slot_ok:
+        return False
+
     rpd_limit = (
         cred.rpd_limit if lane == "responder"
         else int(cred.rpd_limit * settings.llm_rpd_pipeline_fraction)
@@ -543,15 +576,7 @@ async def _reserve(cred: Credential, lane: Lane) -> bool:
     daily_ok, _ = await try_acquire_llm_daily(
         cred.credential_id, rpd_limit, settings.scheduler_timezone
     )
-    if not daily_ok:
-        return False
-
-    rpm_limit = (
-        cred.rpm_limit if lane == "responder"
-        else max(cred.rpm_limit - settings.llm_rpm_responder_reserved, 1)
-    )
-    slot_ok, _ = await try_acquire_llm_slot(cred.credential_id, rpm_limit)
-    return slot_ok
+    return daily_ok
 
 
 async def call_llm(
