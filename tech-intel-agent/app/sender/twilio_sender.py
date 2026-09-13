@@ -7,8 +7,12 @@ from app.db.repository_conversation import get_active_users
 from app.db.repository_news import update_batch_delivery
 from app.db.session_conversation import get_conversation_session
 from app.db.session_news import get_news_session
-from app.queues.redis_client import push_dead_letter
-from app.sender.delivery_queue import pop_batch
+from app.queues.redis_client import (
+    claim_batch_for_delivery,
+    complete_batch_delivery,
+    push_dead_letter,
+    release_batch_delivery,
+)
 
 logger = get_logger(__name__)
 
@@ -44,10 +48,25 @@ async def run_sender_worker() -> None:
     rather than sequentially - flagged as the known next scaling step,
     not implemented in v1.
     """
-    batch_data = await pop_batch()
-    if not batch_data:
+    # CLAIMED, not popped. The batch moves to an in-flight list and is
+    # only destroyed once delivery has actually succeeded.
+    #
+    # This used to call pop_batch(), which removed the payload before
+    # anything was sent. Its signals are already flagged is_sent by the
+    # batching agent, so a failed send left the messages gone from Redis
+    # AND the signals unreturnable by get_unsent_signals - permanently
+    # marked delivered with nothing delivered, and nothing to re-batch
+    # them. Observed live four times against a Twilio 400; each batch was
+    # only recovered because its payload had been dumped to a file first.
+    #
+    # This is the same defect fixed one stage upstream in the batching
+    # agent (flag the DB last). The pipeline claims at-least-once
+    # delivery; popping first made this stage at-most-once, silently.
+    claimed = await claim_batch_for_delivery()
+    if not claimed:
         return
 
+    batch_data, raw_payload = claimed
     batch_id_str = batch_data["batch_id"]
     messages = batch_data["messages"]
 
@@ -73,6 +92,13 @@ async def run_sender_worker() -> None:
         delivery_status = "partial"
     else:
         delivery_status = "failed"
+
+    if delivery_status == "failed":
+        # Nobody got it - put the batch back so a later run retries it,
+        # rather than dropping it on the floor.
+        await release_batch_delivery(raw_payload)
+    else:
+        await complete_batch_delivery(raw_payload)
 
     async with get_news_session() as news_session:
         await update_batch_delivery(news_session, uuid.UUID(batch_id_str), delivered_count, delivery_status)

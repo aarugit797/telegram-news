@@ -52,6 +52,7 @@ _cache_client = _client_for_db(2)
 SIGNAL_QUEUE_KEY = "signal_queue"
 DEAD_LETTER_KEY = "dead_letter_queue"
 DELIVERY_QUEUE_KEY = "delivery_queue"
+DELIVERY_INFLIGHT_KEY = "delivery_inflight"
 RATE_LIMIT_PREFIX = "rate_limit:"
 RATE_LIMIT_TTL_SECONDS = 86400
 CACHE_PREFIX = "cache:"
@@ -275,9 +276,61 @@ async def push_batch_for_delivery(batch_id: str, messages: list[str]) -> None:
 
 
 async def pop_batch_for_delivery() -> dict | None:
-    """Used by sender/twilio_sender.py to drain the next batch ready to send."""
+    """
+    DESTRUCTIVE read - kept only for callers that genuinely want
+    fire-and-forget. Prefer claim_batch_for_delivery below.
+
+    Removing the batch before it is delivered makes this stage
+    at-most-once: if the send then fails, the payload is gone from Redis
+    while its signals are already flagged is_sent, so nothing re-batches
+    them and the messages are silently never delivered.
+    """
     raw = await _signal_queue_client.rpop(DELIVERY_QUEUE_KEY)
     return json.loads(raw) if raw else None
+
+
+async def claim_batch_for_delivery() -> tuple[dict, str] | None:
+    """
+    Reliable-queue claim. Atomically moves the oldest batch from the
+    delivery queue onto an in-flight list, so it is owned by this worker
+    but NOT yet destroyed.
+
+    The caller must then call exactly one of:
+      complete_batch_delivery(raw) - delivery succeeded, drop it
+      release_batch_delivery(raw)  - delivery failed, put it back
+
+    A batch left on the in-flight list is a crash that happened
+    mid-send: recoverable by inspection, rather than lost silently.
+
+    Returns (payload, raw) - the raw JSON string is returned alongside
+    the parsed payload because LREM matches on the exact stored string.
+    Re-serialising the dict would usually produce the same bytes, but
+    "usually" is not a property to build queue correctness on.
+    """
+    raw = await _signal_queue_client.rpoplpush(DELIVERY_QUEUE_KEY, DELIVERY_INFLIGHT_KEY)
+    if not raw:
+        return None
+    return json.loads(raw), raw
+
+
+async def complete_batch_delivery(raw: str) -> None:
+    """Delivery succeeded - remove the batch from the in-flight list."""
+    await _signal_queue_client.lrem(DELIVERY_INFLIGHT_KEY, 1, raw)
+
+
+async def release_batch_delivery(raw: str) -> None:
+    """
+    Delivery failed - return the batch to the queue so a later run
+    retries it. RPUSH rather than LPUSH so it lands at the end the
+    consumer reads from, preserving FIFO order.
+    """
+    await _signal_queue_client.lrem(DELIVERY_INFLIGHT_KEY, 1, raw)
+    await _signal_queue_client.rpush(DELIVERY_QUEUE_KEY, raw)
+
+
+async def inflight_batches() -> list[str]:
+    """Batches claimed but neither completed nor released - i.e. crashed mid-send."""
+    return await _signal_queue_client.lrange(DELIVERY_INFLIGHT_KEY, 0, -1)
 
 
 async def increment_rate_limit(user_id: str) -> int:
