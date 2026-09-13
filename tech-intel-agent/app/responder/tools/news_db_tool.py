@@ -34,6 +34,8 @@ async def run_news_db_tool(question: str) -> tuple[str, list]:
         user_message=NEWS_QA_USER_TEMPLATE.format(retrieved_signals=retrieved_text, question=question),
         trace_name="news-db-tool",
         temperature=0.3,
+        # Reserved lane - a user is waiting on this reply.
+        lane="responder",
     )
 
     return result.content, signals

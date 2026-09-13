@@ -20,5 +20,7 @@ async def compose_final_response(draft_answer: str) -> str:
         trace_name="response-composer",
         temperature=0.5,
         max_tokens=300,
+        # Reserved lane - a user is waiting on this reply.
+        lane="responder",
     )
     return result.content

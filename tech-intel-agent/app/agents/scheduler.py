@@ -47,9 +47,15 @@ def build_scheduler() -> AsyncIOScheduler:
     # was re-examining a largely unchanged list - hourly loses almost
     # nothing in freshness for a quarter of the LLM calls.
     scheduler.add_job(run_hackernews_agent, IntervalTrigger(hours=1), id="hackernews_agent", max_instances=1)
-    scheduler.add_job(run_arxiv_agent, CronTrigger(hour=8, minute=0, timezone=tz), id="arxiv_agent", max_instances=1)
+    # 08:20 not 08:00. arXiv is a ~25-call burst whose items never repeat,
+    # so no cache softens it - and on the hour it landed on top of the
+    # hourly HackerNews run and the 2-hourly blogs run, three bursts
+    # competing for a 10 RPM ceiling at the same instant.
+    scheduler.add_job(run_arxiv_agent, CronTrigger(hour=8, minute=20, timezone=tz), id="arxiv_agent", max_instances=1)
     scheduler.add_job(run_blogs_agent, IntervalTrigger(hours=2), id="blogs_agent", max_instances=1)
-    scheduler.add_job(run_rss_agent, CronTrigger(hour=9, minute=0, timezone=tz), id="rss_agent", max_instances=1)
+    # 09:40 for the same reason, and offset from arXiv's 08:20 so the two
+    # daily bursts never overlap with each other either.
+    scheduler.add_job(run_rss_agent, CronTrigger(hour=9, minute=40, timezone=tz), id="rss_agent", max_instances=1)
     # Unchanged at 30 minutes: this one returns immediately at zero LLM
     # cost when nothing is unsent, so its frequency does not affect the
     # rate limits the other cadences are being cut for.

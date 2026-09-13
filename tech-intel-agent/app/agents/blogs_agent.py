@@ -13,6 +13,7 @@ from app.db.repository_news import (
 )
 from app.db.session_news import get_news_session
 from app.filters.content_fetcher import fetch_full_content
+from app.core.llm_client import LLMQuotaExhausted
 from app.filters.hybrid_filter import run_hybrid_filter
 from app.prompts.filters.blogs_filter import (
     BLOGS_FILTER_SYSTEM_PROMPT,
@@ -73,7 +74,7 @@ async def run_blogs_agent() -> None:
     """Triggered every 30 minutes by agents/scheduler.py."""
     posts = await _fetch_blog_posts()
 
-    counts = {"fetched": len(posts), "skipped_duplicate": 0, "skipped_rejected": 0, "rejected_llm": 0, "approved": 0, "errors": 0}
+    counts = {"fetched": len(posts), "skipped_duplicate": 0, "skipped_rejected": 0, "aborted_on_quota": 0, "rejected_llm": 0, "approved": 0, "errors": 0}
 
     async with get_news_session() as session:
         for post in posts:
@@ -141,6 +142,27 @@ async def run_blogs_agent() -> None:
 
                 await push_signal(str(signal.id))
                 counts["approved"] += 1
+
+            except LLMQuotaExhausted as e:
+                # The shared budget is spent. Stop the whole run rather
+                # than grinding through the remaining items raising the
+                # same error each time.
+                #
+                # Deliberately NOT dead-lettered and NOT cached as
+                # rejected: this item was never judged. Recording either
+                # would turn 'we ran out of quota' into a permanent
+                # verdict. Leaving it untouched means the next run picks
+                # it up normally.
+                counts["aborted_on_quota"] = 1
+                logger.warning(
+                    "Blogs agent aborted early - LLM quota exhausted",
+                    extra={"extra_fields": {
+                        "url": post_url,
+                        "error": str(e),
+                        "processed_before_abort": counts,
+                    }},
+                )
+                break
 
             except Exception as e:
                 counts["errors"] = counts.get("errors", 0) + 1

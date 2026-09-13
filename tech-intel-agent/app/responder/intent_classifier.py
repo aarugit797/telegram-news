@@ -16,5 +16,7 @@ async def classify_intent(message: str) -> str:
         trace_name="intent-classifier",
         json_schema=INTENT_CLASSIFIER_JSON_SCHEMA,
         temperature=0.0,
+        # Reserved lane - a user is waiting on this reply.
+        lane="responder",
     )
     return result.content["intent"]

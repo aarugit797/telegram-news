@@ -15,5 +15,7 @@ async def run_smalltalk_tool(message: str) -> str:
         trace_name="smalltalk-tool",
         temperature=0.7,
         max_tokens=150,
+        # Reserved lane - a user is waiting on this reply.
+        lane="responder",
     )
     return result.content

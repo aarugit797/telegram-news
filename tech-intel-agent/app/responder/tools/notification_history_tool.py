@@ -35,6 +35,8 @@ async def run_notification_history_tool(question: str, user_id: str) -> tuple[st
         user_message=NOTIFICATION_FOLLOWUP_USER_TEMPLATE.format(signals=signals_text, question=question),
         trace_name="notification-history-tool",
         temperature=0.3,
+        # Reserved lane - a user is waiting on this reply.
+        lane="responder",
     )
 
     return result.content, signals

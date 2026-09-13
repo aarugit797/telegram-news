@@ -13,7 +13,15 @@ class Settings(BaseSettings):
     database_url: str                    # News DB
     conversation_database_url: str       # Conversation DB - separate database entirely
     redis_url: str
-    gemini_api_key: str
+    # Comma-separated, one key per Google Cloud project. Kept as a raw
+    # string rather than list[str] because pydantic-settings JSON-decodes
+    # complex types from env vars before any validator runs, so "a,b,c"
+    # would raise SettingsError. gemini_keys() does the split.
+    #
+    # A list rather than numbered settings so the count changes without a
+    # code change - adding a fourth project is an .env edit.
+    gemini_api_keys: str = ""
+    groq_api_key: str = ""
 
     # Google AI Studio free tier. Taken from models.list rather than
     # assumed, then picked on measured availability: gemini-3.8-flash
@@ -29,6 +37,63 @@ class Settings(BaseSettings):
     # way to attribute the drift.
     default_llm_model: str = "gemini-3.5-flash"
     llm_timeout_seconds: float = 20.0
+
+    # ---- LLM rate limiting -------------------------------------------------
+    # The constraint is SYSTEM-WIDE, not per-agent. Gemini's free tier is
+    # ~10-15 RPM shared across everything, and the pipeline and responder
+    # are separate OS processes - an in-process asyncio throttle in each
+    # would let both independently throttle to the limit and together
+    # exceed it. These budgets are enforced in Redis for that reason.
+
+    # Held below the stated ~15 RPM for headroom: the ceiling is not
+    # documented precisely and a 429 costs more than a slightly slower run.
+    llm_rpm_total: int = 10
+    # Slots the pipeline may never take, so a cold start (~75 calls in
+    # minutes) or arXiv's ~25-call daily burst cannot starve a user
+    # waiting on a WhatsApp reply. Pipeline ceiling is total - reserved.
+    #
+    # Applied PER CREDENTIAL now, not once globally: with a pool of
+    # credentials each carrying its own quota, one global reservation
+    # would leave the responder crowded out on whichever credential the
+    # pipeline happened to pick.
+    llm_rpm_responder_reserved: int = 2
+
+    # Requests per day, same split. Verify against the specific model's
+    # documented free-tier RPD - it differs per model and is not
+    # discoverable from the API.
+    llm_rpd_total: int = 1000
+    # The responder alone is ~500 calls/day at moderate use, more than the
+    # whole pipeline. Capping background work at 40% leaves 600 for it.
+    llm_rpd_pipeline_fraction: float = 0.4
+
+    # ---- per-credential quotas -------------------------------------------
+    # Measured, not assumed: one key served 6 calls then returned 429, so
+    # the real ceiling is ~5-6 RPM per project rather than the 10-15 the
+    # docs imply. Held at 5 for headroom.
+    gemini_rpm_per_key: int = 5
+    gemini_rpd_per_key: int = 250
+
+    # Groq is OVERFLOW, not a peer. Its RPM is generous but a 100K
+    # tokens-per-day cap puts the real ceiling near 90 calls/day at our
+    # prompt sizes, so selection prefers Gemini and only falls through to
+    # this once every Gemini credential is spent.
+    groq_rpm: int = 30
+    groq_rpd: int = 90
+    groq_model: str = "openai/gpt-oss-20b"
+
+    # How long a credential is parked after a 429 when the response
+    # carries no retry-after hint of its own.
+    llm_cooldown_seconds: int = 60
+
+    # Backoff attempts for TRANSIENT failures (429/503). Deliberately
+    # separate from call_llm's max_retries, which covers malformed JSON -
+    # a different failure class that should not share a budget.
+    llm_max_transient_retries: int = 4
+    llm_backoff_base_seconds: float = 1.0
+    llm_backoff_max_seconds: float = 32.0
+    # How long a caller waits for an RPM slot before giving up and raising
+    # LLMQuotaExhausted.
+    llm_slot_wait_seconds: float = 45.0
 
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
@@ -57,6 +122,16 @@ class Settings(BaseSettings):
     # and another on an EC2 box running UTC - the jobs would silently
     # fire at different real-world times per deployment.
     scheduler_timezone: str = "Asia/Kolkata"
+
+    def gemini_keys(self) -> list[str]:
+        """Parsed GEMINI_API_KEYS - order preserved, blanks and duplicates dropped."""
+        seen, out = set(), []
+        for raw in self.gemini_api_keys.split(","):
+            key = raw.strip()
+            if key and key not in seen:
+                seen.add(key)
+                out.append(key)
+        return out
 
     model_config = SettingsConfigDict(
         env_file=".env",

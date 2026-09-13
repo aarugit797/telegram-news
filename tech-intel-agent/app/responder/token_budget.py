@@ -47,6 +47,8 @@ async def get_conversation_context(user_id) -> str:
             user_message=older_text,
             trace_name="history-summarizer",
             temperature=0.0,
+            # Reserved lane - a user is waiting on this reply.
+            lane="responder",
         )
 
         await save_summary(session, {

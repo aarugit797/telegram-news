@@ -26,5 +26,7 @@ async def check_guardrail(user_id, current_message: str) -> str:
         trace_name="guardrail-check",
         json_schema=GUARDRAIL_JSON_SCHEMA,
         temperature=0.0,
+        # Reserved lane - a user is waiting on this reply.
+        lane="responder",
     )
     return result.content["classification"]

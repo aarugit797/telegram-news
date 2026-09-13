@@ -50,6 +50,8 @@ async def run_web_search_tool(question: str, user_id: str) -> tuple[str, list]:
         user_message=NEWS_QA_USER_TEMPLATE.format(retrieved_signals=retrieved_text, question=question),
         trace_name="web-search-tool",
         temperature=0.3,
+        # Reserved lane - a user is waiting on this reply.
+        lane="responder",
     )
 
     return result.content, results
