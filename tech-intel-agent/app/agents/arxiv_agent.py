@@ -63,7 +63,7 @@ LOOKBACK_HOURS = RUN_INTERVAL_HOURS + LOOKBACK_BUFFER_HOURS
 
 # arXiv's API terms ask for a descriptive User-Agent identifying the
 # client; the default was python-httpx/0.28.1.
-USER_AGENT = "tech-intel-agent/1.0 (+https://github.com/aarugit797/whatsapp-news)"
+USER_AGENT = "tech-intel-agent/1.0 (+https://github.com/aarugit797/telegram-news)"
 FETCH_ATTEMPTS = 3
 BACKOFF_BASE_SECONDS = 5.0
 
