@@ -10,21 +10,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models_conversation import User, Message, Summary, DailyCost
 
 
-async def is_user_whitelisted(session: AsyncSession, whatsapp_number: str) -> bool:
+async def is_user_whitelisted(session: AsyncSession, channel: str, channel_user_id: str) -> bool:
     """
-    Used by responder/whitelist.py - the very first check on any
-    incoming message, before any LLM call is made.
+    Whitelist check, scoped to the channel. Both parts are required:
+    the same id string on a different service is a different person.
     """
     result = await session.execute(
-        select(User).where(User.whatsapp_number == whatsapp_number)
+        select(User).where(
+            User.channel == channel,
+            User.channel_user_id == channel_user_id,
+        )
     )
     user = result.scalar_one_or_none()
-    return user is not None and user.is_whitelisted
+    return bool(user and user.is_whitelisted and user.is_active)
 
 
 async def get_active_users(session: AsyncSession) -> list[User]:
     """
-    Used by sender/twilio_sender.py to know who to fan a composed
+    Used by sender/batch_sender.py to know who to fan a composed
     batch's messages out to - every whitelisted, active user.
     """
     result = await session.execute(
@@ -33,19 +36,23 @@ async def get_active_users(session: AsyncSession) -> list[User]:
     return list(result.scalars().all())
 
 
-async def get_or_create_user(session: AsyncSession, whatsapp_number: str) -> User:
+async def get_or_create_user(session: AsyncSession, channel: str, channel_user_id: str) -> User:
     """
-    Used right after the whitelist check passes. Whitelisted numbers
-    may still need their first User row created on their very first
-    message (depending on how the whitelist itself is seeded) - this
-    guarantees we always have a real user.id to attach messages to.
+    Fetches this channel's user, creating the row on first contact.
+
+    is_whitelisted defaults True here, matching the previous behaviour -
+    a user who reached this point already passed check_whitelist, and
+    whitelisting is enforced there rather than by this row's default.
     """
     result = await session.execute(
-        select(User).where(User.whatsapp_number == whatsapp_number)
+        select(User).where(
+            User.channel == channel,
+            User.channel_user_id == channel_user_id,
+        )
     )
     user = result.scalar_one_or_none()
     if user is None:
-        user = User(whatsapp_number=whatsapp_number, is_whitelisted=True)
+        user = User(channel=channel, channel_user_id=channel_user_id, is_whitelisted=True)
         session.add(user)
         await session.commit()
         await session.refresh(user)

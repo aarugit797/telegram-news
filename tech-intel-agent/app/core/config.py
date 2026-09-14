@@ -107,6 +107,15 @@ class Settings(BaseSettings):
     # LLMQuotaExhausted.
     llm_slot_wait_seconds: float = 45.0
 
+    # ---- messaging channel ------------------------------------------------
+    # Which service actually carries messages. Telegram by default because
+    # Twilio's WhatsApp sandbox cannot send LLM-written text on a trial
+    # account (21654 ContentSid Required - business-initiated messages
+    # need pre-approved templates). Set to "whatsapp" once a paid account
+    # and an approved WABA exist; no code change is needed.
+    active_channel: str = "telegram"
+    telegram_bot_token: str = ""
+
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
     twilio_whatsapp_number: str = ""

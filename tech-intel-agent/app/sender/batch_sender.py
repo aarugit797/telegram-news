@@ -2,7 +2,7 @@ import asyncio
 import uuid
 
 from app.core.logging_config import get_logger
-from app.core.twilio_client import send_whatsapp_message
+from app.core.channels import get_channel, send_message
 from app.db.repository_conversation import get_active_users
 from app.db.repository_news import update_batch_delivery
 from app.db.session_conversation import get_conversation_session
@@ -17,19 +17,24 @@ from app.queues.redis_client import (
 logger = get_logger(__name__)
 
 # Gap between one USER's consecutive messages, so a 3-message batch
-# arrives as 3 separate WhatsApp bubbles rather than one instant burst.
+# arrives as 3 separate bubbles rather than one instant burst.
+#
+# Also satisfies Telegram's rate limit of roughly 1 message/second to the
+# same chat (see channels/telegram.py). The spacing lives here rather
+# than inside each channel because it is a product decision - how a batch
+# should FEEL to read - that happens to also clear the technical floor.
 MESSAGE_DELAY_SECONDS = 2
 
 
-async def _send_batch_to_user(user_number: str, messages: list[str]) -> bool:
+async def _send_batch_to_user(channel_user_id: str, messages: list[str]) -> bool:
     """Sends a user their full message sequence, spaced apart. Returns True only if every message succeeded."""
     for i, message_text in enumerate(messages):
         try:
-            await send_whatsapp_message(user_number, message_text)
+            await send_message(user_number, message_text)
         except Exception as e:
             logger.error(
                 "Failed to send message to user",
-                extra={"extra_fields": {"user": user_number, "error": str(e)}},
+                extra={"extra_fields": {"user": channel_user_id, "error": str(e)}},
             )
             return False
         if i < len(messages) - 1:
@@ -75,14 +80,14 @@ async def run_sender_worker() -> None:
 
     delivered_count = 0
     for user in users:
-        success = await _send_batch_to_user(user.whatsapp_number, messages)
+        success = await _send_batch_to_user(user.channel_user_id, messages)
         if success:
             delivered_count += 1
         else:
             await push_dead_letter({
-                "component": "twilio_sender",
+                "component": "batch_sender",
                 "batch_id": batch_id_str,
-                "user": user.whatsapp_number,
+                "user": user.channel_user_id,
                 "error": "delivery failed",
             })
 
@@ -108,5 +113,6 @@ async def run_sender_worker() -> None:
         extra={"extra_fields": {
             "batch_id": batch_id_str, "total_users": len(users),
             "delivered": delivered_count, "status": delivery_status,
+            "channel": get_channel().name,
         }},
     )

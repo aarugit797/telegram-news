@@ -39,7 +39,12 @@ class User(Base):
         server_default=text("gen_random_uuid()"),
     )
 
-    whatsapp_number: Mapped[str] = mapped_column(String(20), unique=True)
+    # Replaces whatsapp_number. A user is identified by WHICH service and
+    # their id ON that service, because those ids are not interchangeable:
+    # a Telegram chat_id is a number Telegram assigns, a WhatsApp id is an
+    # E.164 phone number.
+    channel: Mapped[str] = mapped_column(String(20))            # "telegram" | "whatsapp"
+    channel_user_id: Mapped[str] = mapped_column(String(100))   # chat_id, or phone number
     display_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     registered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, server_default=text("now()"))
@@ -48,6 +53,17 @@ class User(Base):
 
     daily_message_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     last_active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+    __table_args__ = (
+        # Scoped to the channel, NOT globally unique on channel_user_id.
+        # The same person legitimately exists as two rows if they use both
+        # services - different ids, separate conversation histories,
+        # separate daily budgets. A global unique on the id alone would
+        # also collide the moment a Telegram chat_id happened to match a
+        # phone number, which nothing prevents.
+        UniqueConstraint("channel", "channel_user_id", name="uq_users_channel_user"),
+    )
 
 
 class Message(Base):

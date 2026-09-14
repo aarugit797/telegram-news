@@ -279,7 +279,7 @@ async def update_batch_delivery(
     session: AsyncSession, batch_id: uuid.UUID, user_count: int, delivery_status: str
 ) -> None:
     """
-    Used by sender/twilio_sender.py AFTER actually attempting
+    Used by sender/batch_sender.py AFTER actually attempting
     delivery - fills in how many users were reached and whether it
     succeeded. Deliberately not set at batch_assembly time, since
     neither is known until delivery has genuinely been attempted.

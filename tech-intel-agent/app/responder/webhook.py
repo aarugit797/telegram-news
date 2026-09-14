@@ -3,7 +3,7 @@ from twilio.request_validator import RequestValidator
 
 from app.core.config import settings
 from app.core.logging_config import get_logger
-from app.core.twilio_client import send_whatsapp_message
+from app.core.channels import send_message
 from app.db.repository_conversation import save_message
 from app.db.session_conversation import get_conversation_session
 from app.responder.whitelist import check_whitelist, ensure_user_record
@@ -70,17 +70,17 @@ async def _process_message(from_number: str, message_body: str) -> None:
 
     try:
         if not await check_whitelist(from_number):
-            await send_whatsapp_message(from_number, FIXED_RESPONSES["not_whitelisted"])
+            await send_message(from_number, FIXED_RESPONSES["not_whitelisted"])
             return
 
         user = await ensure_user_record(from_number)
 
         if not await check_and_increment_rate_limit(str(user.id)):
-            await send_whatsapp_message(from_number, FIXED_RESPONSES["rate_limited"])
+            await send_message(from_number, FIXED_RESPONSES["rate_limited"])
             return
 
         if not await is_under_cost_limit(user.id):
-            await send_whatsapp_message(from_number, FIXED_RESPONSES["cost_limited"])
+            await send_message(from_number, FIXED_RESPONSES["cost_limited"])
             return
 
         async with get_conversation_session() as session:
@@ -106,10 +106,10 @@ async def _process_message(from_number: str, message_body: str) -> None:
                     "message_length": len(message_body),
                 }},
             )
-            await send_whatsapp_message(from_number, FIXED_RESPONSES["injection_detected"])
+            await send_message(from_number, FIXED_RESPONSES["injection_detected"])
             return
         if guardrail_result == "OFF_TOPIC":
-            await send_whatsapp_message(from_number, FIXED_RESPONSES["off_topic"])
+            await send_message(from_number, FIXED_RESPONSES["off_topic"])
             return
 
         intent = await classify_intent(message_body)
@@ -128,7 +128,7 @@ async def _process_message(from_number: str, message_body: str) -> None:
         agent_result = await run_conversational_agent(intent, message_body, str(user.id))
         final_reply = await compose_final_response(agent_result["output"])
 
-        await send_whatsapp_message(from_number, final_reply)
+        await send_message(from_number, final_reply)
 
         async with get_conversation_session() as session:
             await save_message(session, {

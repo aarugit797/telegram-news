@@ -31,7 +31,7 @@ async def assemble_batch(session: AsyncSession, clusters: list[list]):
     re-considered on a future run.
 
     Deliberately does NOT set user_count here - that's only known
-    after sender/twilio_sender.py actually attempts delivery.
+    after sender/batch_sender.py actually attempts delivery.
     """
     representatives = [max(cluster, key=lambda s: s.composite_score) for cluster in clusters]
     representatives.sort(key=lambda s: s.composite_score, reverse=True)

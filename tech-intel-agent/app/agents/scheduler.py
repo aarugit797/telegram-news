@@ -8,7 +8,7 @@ from app.agents.arxiv_agent import run_arxiv_agent
 from app.agents.blogs_agent import run_blogs_agent
 from app.agents.rss_agent import run_rss_agent
 from app.processor.batching_agent import run_batching_agent
-from app.sender.twilio_sender import run_sender_worker
+from app.sender.batch_sender import run_sender_worker
 from app.db.cleanup_job import run_cleanup_job
 from app.core.config import settings
 from app.core.logging_config import get_logger
