@@ -3,21 +3,21 @@ The messaging-channel interface.
 
 Same shape as the LLM provider adapter in core/llm_client.py, and for the
 same reason: one internal interface, provider-specific translation behind
-it, so the twelve places that send a message never learn which service
-actually carries it.
+it, so the places that send a message never learn which service carries
+it.
 
-WHY THIS EXISTS. Twilio's WhatsApp sandbox turned out to be unusable on a
-trial account - verified empirically, not assumed: sending arbitrary text
-fails with 21654 "ContentSid Required", the parallel SMS attempt says it
-plainly ("Trial accounts can only use predefined SMS templates"), and the
-Content API needed to create a template is itself blocked on trial. That
-is a closed loop. Business-initiated WhatsApp messages need pre-approved
-templates, which are fundamentally incompatible with text an LLM writes
-fresh for each batch.
+HISTORY, because the shape looks over-built for a single implementation.
+This started as Twilio WhatsApp. That turned out to be unusable: sending
+LLM-written text failed with 21654 "ContentSid Required", because
+business-initiated WhatsApp messages require pre-approved templates -
+fundamentally incompatible with text written fresh for every message.
+Telegram has no approval process and no template restriction.
 
-Telegram has no approval process and no template restriction. The
-WhatsApp implementation is KEPT, not deleted, so it can be switched back
-on with one config value if a WhatsApp Business Account is obtained.
+The swap was a config change rather than a rewrite BECAUSE this interface
+existed. Twilio has since been removed entirely (Telegram is the product,
+not a stopgap), but the seam stays: it is forty lines, it has already
+proved its worth once, and the next channel - Discord, Slack, email -
+plugs in here.
 """
 from abc import ABC, abstractmethod
 

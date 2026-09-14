@@ -3,17 +3,19 @@ Channel selection.
 
 The active channel is chosen once from config rather than passed through
 every call, because a single deployment talks to exactly one messaging
-service - a user is reachable on Telegram or on WhatsApp, and the
-pipeline has no reason to decide per message.
+service, and the pipeline has no reason to decide per message.
 """
 from app.core.channels.base import MessageChannel
 from app.core.channels.telegram import TelegramChannel
-from app.core.channels.whatsapp import WhatsAppChannel
 from app.core.config import settings
 
+# One entry today. The registry and the active_channel setting are kept
+# rather than collapsed into "just import TelegramChannel", because this
+# seam is what made replacing Twilio a config change instead of a rewrite
+# - it earned its keep once already, and removing it now only to add it
+# back for the next channel would be pure churn.
 _CHANNELS = {
     "telegram": TelegramChannel,
-    "whatsapp": WhatsAppChannel,
 }
 
 _channel: MessageChannel | None = None
@@ -23,10 +25,10 @@ def get_channel() -> MessageChannel:
     """
     The configured channel, built once on first use.
 
-    Lazy for the same reason twilio_client is: constructing a channel can
-    require credentials or a running event loop, and doing that at import
-    time makes the whole scheduler and responder unimportable when the
-    inactive channel happens to be misconfigured.
+    Lazy on purpose: constructing a channel requires credentials, and
+    doing that at import time makes the whole scheduler and responder
+    unimportable when a token is missing - including for the pipeline
+    processes that never send a message at all.
     """
     global _channel
     if _channel is None:

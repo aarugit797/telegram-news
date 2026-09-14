@@ -32,7 +32,7 @@ def init_observability(service_name: str, include_fastapi: bool = False) -> None
     Called once, at the very top of each process's startup -
     pipeline_main.py calls init_observability("intelligence-pipeline"),
     responder/main.py calls
-    init_observability("whatsapp-responder", include_fastapi=True).
+    init_observability("telegram-responder", include_fastapi=True).
 
     service_name: tags every Sentry event so errors from the two
     independent processes are distinguishable in the dashboard,
@@ -76,7 +76,7 @@ def init_observability(service_name: str, include_fastapi: bool = False) -> None
         environment=settings.environment,
         integrations=integrations,
         traces_sample_rate=1.0 if settings.environment == "local" else 0.2,
-        # We handle real WhatsApp numbers and message content - never
+        # We handle real user identifiers and message content - never
         # send that to a third-party service by default. This is a
         # deliberate privacy choice, not an oversight of the default.
         send_default_pii=False,

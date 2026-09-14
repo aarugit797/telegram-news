@@ -17,6 +17,12 @@ TELEGRAM_API_BASE = "https://api.telegram.org"
 # spacing has to respect.
 MIN_SECONDS_BETWEEN_MESSAGES_TO_ONE_CHAT = 1.0
 
+# Telegram rejects messages over 4096 characters with a 400. LLM-written
+# text is normally far shorter, but a composer that ignores its length
+# instruction would otherwise lose the whole message rather than most of
+# it.
+MAX_MESSAGE_CHARS = 4096
+
 
 class TelegramChannel(MessageChannel):
     """
@@ -60,7 +66,7 @@ class TelegramChannel(MessageChannel):
                 self._api("sendMessage"),
                 json={
                     "chat_id": channel_user_id,
-                    "text": text,
+                    "text": text[:MAX_MESSAGE_CHARS],
                     # Deliberately no parse_mode. LLM-written text
                     # regularly contains underscores, asterisks and
                     # brackets; asking Telegram to parse it as Markdown

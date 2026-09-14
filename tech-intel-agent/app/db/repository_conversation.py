@@ -25,13 +25,27 @@ async def is_user_whitelisted(session: AsyncSession, channel: str, channel_user_
     return bool(user and user.is_whitelisted and user.is_active)
 
 
-async def get_active_users(session: AsyncSession) -> list[User]:
+async def get_active_users(session: AsyncSession, channel: str) -> list[User]:
     """
-    Used by sender/batch_sender.py to know who to fan a composed
-    batch's messages out to - every whitelisted, active user.
+    Used by sender/batch_sender.py to know who to fan a composed batch's
+    messages out to - every whitelisted, active user ON THIS CHANNEL.
+
+    The channel filter is not optional. channel_user_id means different
+    things per channel: a Telegram chat_id and an E.164 phone number are
+    not interchangeable, so handing a WhatsApp user's number to the
+    Telegram sender produces a guaranteed failure, a dead-letter entry
+    and a "partial" batch status - for a user who was never reachable on
+    the active channel in the first place.
+
+    Returning users the active channel cannot reach would make every
+    batch look partially broken while nothing was actually wrong.
     """
     result = await session.execute(
-        select(User).where(User.is_whitelisted == True, User.is_active == True)  # noqa: E712
+        select(User).where(
+            User.channel == channel,
+            User.is_whitelisted == True,  # noqa: E712
+            User.is_active == True,       # noqa: E712
+        )
     )
     return list(result.scalars().all())
 

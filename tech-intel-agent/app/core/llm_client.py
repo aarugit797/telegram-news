@@ -56,6 +56,11 @@ class LLMQuotaExhausted(Exception):
 # codes below are genuinely transient.
 _RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
+# Extra tokens granted to Groq reasoning models on top of whatever the
+# caller asked for, since reasoning is billed against the same budget
+# but never appears in the response.
+GROQ_REASONING_HEADROOM_TOKENS = 2048
+
 # Both SDKs' error hierarchies, so one except clause covers the pool.
 _PROVIDER_ERRORS = (genai_errors.APIError, groq_errors.APIStatusError)
 
@@ -302,6 +307,21 @@ class GroqProvider(LLMProvider):
         max_tokens: int,
         temperature: float,
     ) -> LLMResult:
+        # REASONING HEADROOM. Groq's gpt-oss models reason before
+        # answering, and those reasoning tokens are billed against the
+        # SAME max_tokens as the visible answer - while never appearing
+        # in the content. Callers size max_tokens for the answer they
+        # want ("300 characters of reply"), so passing it through
+        # unchanged silently starves the answer.
+        #
+        # Measured on identical calls: reasoning ran 613, 845 and 1067
+        # characters on three consecutive requests. At max_tokens=300
+        # that is sometimes enough and sometimes not, which is exactly
+        # how it presented - a response-composer call that failed once
+        # with "empty response from Groq" and succeeded on retry.
+        #
+        # The adapter therefore translates the caller's intent into the
+        # provider's accounting, which is the job of an adapter.
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": [
@@ -309,7 +329,7 @@ class GroqProvider(LLMProvider):
                 {"role": "user", "content": user_message},
             ],
             "temperature": temperature,
-            "max_tokens": max_tokens,
+            "max_tokens": max_tokens + GROQ_REASONING_HEADROOM_TOKENS,
         }
         if json_schema:
             kwargs["response_format"] = {
@@ -322,9 +342,17 @@ class GroqProvider(LLMProvider):
             }
 
         response = await self._client.chat.completions.create(**kwargs)
-        text = response.choices[0].message.content
+        choice = response.choices[0]
+        text = choice.message.content
         if not text:
-            raise ValueError("empty response from Groq")
+            # Name the actual cause. "empty response" alone sent an
+            # earlier investigation looking for a network fault when the
+            # answer was that reasoning had consumed the token budget.
+            raise ValueError(
+                f"empty response from Groq (finish_reason={choice.finish_reason!r}, "
+                f"completion_tokens={getattr(response.usage, 'completion_tokens', '?')}) - "
+                f"reasoning likely consumed the token budget"
+            )
 
         if json_schema:
             content: dict | str = json.loads(text)

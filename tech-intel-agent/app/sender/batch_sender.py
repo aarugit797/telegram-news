@@ -30,7 +30,7 @@ async def _send_batch_to_user(channel_user_id: str, messages: list[str]) -> bool
     """Sends a user their full message sequence, spaced apart. Returns True only if every message succeeded."""
     for i, message_text in enumerate(messages):
         try:
-            await send_message(user_number, message_text)
+            await send_message(channel_user_id, message_text)
         except Exception as e:
             logger.error(
                 "Failed to send message to user",
@@ -76,7 +76,8 @@ async def run_sender_worker() -> None:
     messages = batch_data["messages"]
 
     async with get_conversation_session() as conv_session:
-        users = await get_active_users(conv_session)
+        # Only users reachable on the channel this deployment is running.
+        users = await get_active_users(conv_session, get_channel().name)
 
     delivered_count = 0
     for user in users:

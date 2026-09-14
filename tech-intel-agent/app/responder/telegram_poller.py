@@ -11,14 +11,15 @@ WEBHOOKS ARE THE RIGHT CHOICE ONCE DEPLOYED. They remove the idle
 request loop, deliver with lower latency, and scale without a dedicated
 polling process. Telegram supports setWebhook with a `secret_token`,
 which it then sends back in the X-Telegram-Bot-Api-Secret-Token header on
-every request - that header is what makes the endpoint verifiable, and it
-is the direct equivalent of the Twilio signature check already in
-webhook.py. Switching over means calling setWebhook and adding a route
-that checks that header; this module then simply stops being run.
+every request - that header is what makes the endpoint verifiable.
+Switching over means calling setWebhook and adding a route that checks
+it; responder/message_handler.py is already transport-agnostic, so that
+route would call the same process_message this module does, and this
+module simply stops being run.
 
-The responder chain itself is channel-agnostic and needs no changes for
-either transport: this module's only job is to turn an update into the
-(sender_id, text) pair _process_message already takes.
+The responder chain needs no changes for either transport: this module's
+only job is to turn an update into the (chat_id, text) pair
+process_message already takes.
 """
 import asyncio
 
@@ -26,7 +27,7 @@ import httpx
 
 from app.core.config import settings
 from app.core.logging_config import get_logger
-from app.responder.webhook import _process_message
+from app.responder.message_handler import process_message
 
 logger = get_logger(__name__)
 
@@ -120,16 +121,16 @@ async def poll_once(client: httpx.AsyncClient, offset: int | None) -> int | None
                 "Telegram message received",
                 extra={"extra_fields": {
                     # chat_id, never the message body - the same reason
-                    # webhook.py stopped logging message text.
+                    # message_handler stopped logging message text.
                     "chat_id": chat_id,
                     "update_id": update_id,
                     "text_length": len(text),
                 }},
             )
             try:
-                # The SAME function the Twilio webhook calls, unchanged.
-                # Everything channel-specific ends at this line.
-                await _process_message(chat_id, text)
+                # Everything Telegram-specific ends at this line;
+                # process_message knows nothing about the transport.
+                await process_message(chat_id, text)
             except Exception as e:
                 logger.error(
                     "Telegram message processing failed",

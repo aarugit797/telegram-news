@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     llm_rpm_total: int = 10
     # Slots the pipeline may never take, so a cold start (~75 calls in
     # minutes) or arXiv's ~25-call daily burst cannot starve a user
-    # waiting on a WhatsApp reply. Pipeline ceiling is total - reserved.
+    # waiting on a reply. Pipeline ceiling is total - reserved.
     #
     # Applied PER CREDENTIAL now, not once globally: with a pool of
     # credentials each carrying its own quota, one global reservation
@@ -108,17 +108,13 @@ class Settings(BaseSettings):
     llm_slot_wait_seconds: float = 45.0
 
     # ---- messaging channel ------------------------------------------------
-    # Which service actually carries messages. Telegram by default because
-    # Twilio's WhatsApp sandbox cannot send LLM-written text on a trial
-    # account (21654 ContentSid Required - business-initiated messages
-    # need pre-approved templates). Set to "whatsapp" once a paid account
-    # and an approved WABA exist; no code change is needed.
+    # Which service carries messages. Telegram is the only implementation
+    # today - Twilio WhatsApp was removed after proving unusable for
+    # LLM-written text (see core/channels/base.py). The setting stays so
+    # adding a channel is a config change, which is exactly what made
+    # removing Twilio cheap.
     active_channel: str = "telegram"
     telegram_bot_token: str = ""
-
-    twilio_account_sid: str = ""
-    twilio_auth_token: str = ""
-    twilio_whatsapp_number: str = ""
 
     voyage_api_key: str = ""
 

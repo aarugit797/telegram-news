@@ -1,10 +1,10 @@
 # Web framework (async responder)
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
-# Required for request.form() in responder/webhook.py - Twilio posts
-# application/x-www-form-urlencoded, and Starlette refuses to parse any
-# form body without this installed. Missing it meant every webhook call
-# would have failed in production, not just in tests.
+# Was required for request.form() in the Twilio webhook, which is gone.
+# Kept because FastAPI still needs it for any form-encoded route, and a
+# Telegram webhook (the eventual replacement for long polling) posts JSON
+# but is served by the same app. Cheap to keep, annoying to rediscover.
 python-multipart==0.0.9
 
 # Database
@@ -57,8 +57,10 @@ langsmith==0.3.15
 # Embeddings
 voyageai==0.2.3
 
-# WhatsApp delivery
-twilio==9.3.2
+# Messaging delivery
+# Telegram needs no SDK - sending is one POST to the Bot API over httpx,
+# which is already a dependency. twilio==9.3.2 was removed here when
+# WhatsApp was dropped.
 
 # Web search tool
 tavily-python==0.5.0

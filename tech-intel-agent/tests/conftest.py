@@ -6,13 +6,13 @@ was shipping events to the live Sentry project ("Sentry is attempting to
 send 4 pending events" at the end of every run), which pollutes the error
 dashboard with failures that were deliberately provoked by tests.
 
-Why this is module-level code and not a fixture: tests/test_webhook.py
-builds TestClient(app) at import time, and importing app.responder.main
-runs init_observability() immediately, at import. Any fixture - even
-session-scoped and autouse - runs too late, because collection has already
-imported the test module and Sentry is already initialised against the
-real DSN. pytest imports conftest.py before the test modules it covers, so
-this is the last point where the environment can still be changed.
+Why this is module-level code and not a fixture: importing
+app.responder.main runs init_observability() immediately, at import. Any
+fixture - even session-scoped and autouse - runs too late, because
+collection has already imported the test module and Sentry is already
+initialised against the real DSN. pytest imports conftest.py before the
+test modules it covers, so this is the last point where the environment
+can still be changed.
 
 app.core.config builds its Settings singleton at import too, and
 pydantic-settings gives environment variables precedence over values in

@@ -1,25 +1,28 @@
-from fastapi import APIRouter, Request, Response, BackgroundTasks
-from twilio.request_validator import RequestValidator
+"""
+The conversation chain for one inbound message.
 
-from app.core.config import settings
-from app.core.logging_config import get_logger
+Lives here rather than in a transport module because it is transport-
+agnostic: the Telegram poller calls it today, and a Telegram webhook
+route would call the same function unchanged once this is deployed
+behind HTTPS. It was extracted from responder/webhook.py when Twilio was
+removed - the Twilio route and its signature verification went, this did
+not.
+"""
 from app.core.channels import send_message
+from app.core.logging_config import get_logger
+from app.core.usage_context import get_totals, start_tracking, stop_tracking
 from app.db.repository_conversation import save_message
 from app.db.session_conversation import get_conversation_session
-from app.responder.whitelist import check_whitelist, ensure_user_record
-from app.responder.rate_limit import check_and_increment_rate_limit
-from app.core.usage_context import get_totals, start_tracking, stop_tracking
+from app.responder.conversational_agent import run_conversational_agent
 from app.responder.cost_tracker import is_under_cost_limit, record_llm_usage
 from app.responder.guardrail import check_guardrail
 from app.responder.intent_classifier import classify_intent
-from app.responder.token_budget import get_conversation_context
-from app.responder.conversational_agent import run_conversational_agent
+from app.responder.rate_limit import check_and_increment_rate_limit
 from app.responder.response_composer import compose_final_response
+from app.responder.token_budget import get_conversation_context
+from app.responder.whitelist import check_whitelist, ensure_user_record
 
 logger = get_logger(__name__)
-router = APIRouter()
-
-_validator = RequestValidator(settings.twilio_auth_token)
 
 FIXED_RESPONSES = {
     "not_whitelisted": "This service is currently invite-only. Contact us to join the waitlist.",
@@ -33,19 +36,7 @@ FIXED_RESPONSES = {
 }
 
 
-async def _verify_signature(request: Request) -> bool:
-    """
-    Confirms this request genuinely came from Twilio, not a spoofed
-    request from anyone who discovered our webhook URL. Twilio signs
-    every webhook call using our Auth Token; we recompute that same
-    signature from the request and compare.
-    """
-    signature = request.headers.get("X-Twilio-Signature", "")
-    form_data = await request.form()
-    return _validator.validate(str(request.url), dict(form_data), signature)
-
-
-async def _process_message(from_number: str, message_body: str) -> None:
+async def process_message(from_number: str, message_body: str) -> None:
     """
     The full processing chain - runs as a background task AFTER
     Twilio already received its 200 OK, since Twilio times out
@@ -157,18 +148,3 @@ async def _process_message(from_number: str, message_body: str) -> None:
         # background tasks sequentially in ONE task, so the next thing to
         # run would keep reporting into this user's totals.
         stop_tracking(tracking_token)
-
-
-@router.post("/webhook/whatsapp")
-async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
-    if not await _verify_signature(request):
-        return Response(status_code=403)
-
-    form_data = await request.form()
-    from_number = str(form_data.get("From", "")).replace("whatsapp:", "")
-    message_body = str(form_data.get("Body", ""))
-
-    background_tasks.add_task(_process_message, from_number, message_body)
-
-    return Response(status_code=200)
-
