@@ -227,7 +227,20 @@ async def run_arxiv_agent() -> None:
 
                 # No content_fetcher call - the abstract already IS
                 # the full content for this source.
-                summary = filter_result.justification or paper.get("title", "")
+                # The model's DESCRIPTION of the thing, not its verdict on it.
+                #
+                # This used to store filter_result.justification, which is
+                # the SCORING RATIONALE ("Genuinely novel X, highly
+                # relevant to Y"). The message composer was then faithfully
+                # rewriting evaluations into casual language, which is why
+                # notifications read like a review board. No prompt change
+                # fixes bad input.
+                #
+                # The filter call already happens, so asking for one more
+                # field costs nothing. filter_justification is still stored
+                # separately below - it remains useful for auditing why a
+                # threshold decision went the way it did.
+                summary = (filter_result.scores or {}).get("summary") or paper.get("title", "")
                 embedding = await get_embedding(summary, input_type="document")
 
                 signal = await insert_signal(session, {

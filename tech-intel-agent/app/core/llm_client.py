@@ -613,7 +613,24 @@ async def call_llm(
     trace_name: str,
     json_schema: dict | None = None,
     model: str | None = None,
-    max_tokens: int = 1024,
+    # 4096, not 1024. This has now caused three separate production
+    # failures - dedup, the message composer, and the filters - each
+    # presenting as a JSON parse error ("Unterminated string") rather
+    # than as "response too long", because truncation cuts the model off
+    # mid-JSON and the caller sees malformed output.
+    #
+    # 1024 was a reasonable default for a plain completion API. It is not
+    # one here: on gemini-3.5-flash and Groq's gpt-oss models, reasoning
+    # tokens are billed against this same budget while never appearing in
+    # the response, so the VISIBLE output is cut far below the nominal
+    # cap. A caller asking for "1024 tokens of answer" silently gets
+    # whatever is left after the model finishes thinking.
+    #
+    # Raising the default fixes the seven call sites that never set it,
+    # and - more usefully - stops the next call site inheriting the
+    # problem. Callers that genuinely need a tighter ceiling still pass
+    # one explicitly.
+    max_tokens: int = 4096,
     temperature: float = 0.0,
     max_retries: int = 1,
     lane: Lane = "pipeline",

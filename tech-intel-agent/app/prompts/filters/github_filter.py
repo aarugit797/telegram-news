@@ -67,6 +67,24 @@ something useful, discover a tool worth trying, or identify a meaningful enginee
 
 Justification should explain the concrete signal in the metadata and acknowledge uncertainty when
 the description is insufficient.
+
+SUMMARY — a SEPARATE field from justification, and the one users actually see.
+
+Write ONE plain sentence saying what repository IS and what it DOES, for a reader who has
+never heard of it. Describe the thing, not your opinion of it.
+
+This is NOT an evaluation. Do not use "novel", "impressive", "notable", "interesting",
+"powerful", "cutting-edge", or any word that rates it. Do not mention scores, novelty,
+relevance or applicability. Do not say whether it is worth attention - that is what
+justification is for.
+
+If the supplied metadata genuinely does not say what it does, describe only what is
+actually stated rather than inventing capability.
+
+Good:  "A Go library that runs database migrations from plain SQL files, with rollback."
+Good:  "A study measuring how retrieval depth changes hallucination rates in RAG systems."
+Bad:   "A novel and impressive approach to migrations that engineers will find useful."
+Bad:   "Scores highly on applicability because teams could adopt it immediately."
 """
 
 GITHUB_FILTER_USER_TEMPLATE = """Repository: {repo_name}
@@ -83,6 +101,7 @@ GITHUB_FILTER_JSON_SCHEMA = {
         "relevance": {"type": "integer", "minimum": 1, "maximum": 5},
         "applicability": {"type": "integer", "minimum": 1, "maximum": 5},
         "justification": {"type": "string"},
+        "summary": {"type": "string"},
     },
-    "required": ["novelty", "relevance", "applicability", "justification"],
+    "required": ["novelty", "relevance", "applicability", "justification", "summary"],
 }

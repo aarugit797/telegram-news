@@ -60,6 +60,24 @@ In the justification:
 - State the strongest concrete reason the paper is worth attention OR the strongest reason it is not.
 - Mention the practical implication when one is supported.
 - Be concise and evidence-based.
+
+SUMMARY — a SEPARATE field from justification, and the one users actually see.
+
+Write ONE plain sentence saying what paper IS and what it DOES, for a reader who has
+never heard of it. Describe the thing, not your opinion of it.
+
+This is NOT an evaluation. Do not use "novel", "impressive", "notable", "interesting",
+"powerful", "cutting-edge", or any word that rates it. Do not mention scores, novelty,
+relevance or applicability. Do not say whether it is worth attention - that is what
+justification is for.
+
+If the supplied metadata genuinely does not say what it does, describe only what is
+actually stated rather than inventing capability.
+
+Good:  "A Go library that runs database migrations from plain SQL files, with rollback."
+Good:  "A study measuring how retrieval depth changes hallucination rates in RAG systems."
+Bad:   "A novel and impressive approach to migrations that engineers will find useful."
+Bad:   "Scores highly on applicability because teams could adopt it immediately."
 """
 
 ARXIV_FILTER_USER_TEMPLATE = """Title: {title}
@@ -76,6 +94,7 @@ ARXIV_FILTER_JSON_SCHEMA = {
         "relevance": {"type": "integer", "minimum": 1, "maximum": 5},
         "applicability": {"type": "integer", "minimum": 1, "maximum": 5},
         "justification": {"type": "string"},
+        "summary": {"type": "string"},
     },
-    "required": ["novelty", "relevance", "applicability", "justification"],
+    "required": ["novelty", "relevance", "applicability", "justification", "summary"],
 }

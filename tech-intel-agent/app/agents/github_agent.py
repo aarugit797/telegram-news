@@ -226,7 +226,20 @@ async def run_github_agent() -> None:
                 # a dedicated "describe this repo in one line" prompt
                 # may produce a cleaner summary than a score
                 # justification repurposed as one.
-                summary = filter_result.justification or repo.get("description") or repo.get("name", "")
+                # The model's DESCRIPTION of the thing, not its verdict on it.
+                #
+                # This used to store filter_result.justification, which is
+                # the SCORING RATIONALE ("Genuinely novel X, highly
+                # relevant to Y"). The message composer was then faithfully
+                # rewriting evaluations into casual language, which is why
+                # notifications read like a review board. No prompt change
+                # fixes bad input.
+                #
+                # The filter call already happens, so asking for one more
+                # field costs nothing. filter_justification is still stored
+                # separately below - it remains useful for auditing why a
+                # threshold decision went the way it did.
+                summary = (filter_result.scores or {}).get("summary") or repo.get("description") or repo.get("name", "")
 
                 embedding = await get_embedding(summary, input_type="document")
 

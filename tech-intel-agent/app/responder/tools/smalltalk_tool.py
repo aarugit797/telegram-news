@@ -14,7 +14,15 @@ async def run_smalltalk_tool(message: str) -> str:
         user_message=SMALLTALK_USER_TEMPLATE.format(message=message),
         trace_name="smalltalk-tool",
         temperature=0.7,
-        max_tokens=150,
+        # 1024, not a tight cap. max_tokens looks like a brevity lever but
+        # is an unreliable one here: reasoning tokens are billed against
+        # it and never returned, so a tight ceiling does not shorten the
+        # answer - it truncates or empties it. This exact call at 300
+        # failed with "empty response from Groq" on a live user message.
+        #
+        # Length is the PROMPT's job (it already asks for 1-3 sentences),
+        # and this is a safety ceiling rather than a style control.
+        max_tokens=1024,
         # Reserved lane - a user is waiting on this reply.
         lane="responder",
     )

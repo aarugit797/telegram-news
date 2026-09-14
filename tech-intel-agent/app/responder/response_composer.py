@@ -19,7 +19,15 @@ async def compose_final_response(draft_answer: str) -> str:
         user_message=RESPONSE_COMPOSER_USER_TEMPLATE.format(draft_answer=draft_answer),
         trace_name="response-composer",
         temperature=0.5,
-        max_tokens=300,
+        # 1024, not a tight cap. max_tokens looks like a brevity lever but
+        # is an unreliable one here: reasoning tokens are billed against
+        # it and never returned, so a tight ceiling does not shorten the
+        # answer - it truncates or empties it. This exact call at 300
+        # failed with "empty response from Groq" on a live user message.
+        #
+        # Length is the PROMPT's job (it already asks for 1-3 sentences),
+        # and this is a safety ceiling rather than a style control.
+        max_tokens=1024,
         # Reserved lane - a user is waiting on this reply.
         lane="responder",
     )

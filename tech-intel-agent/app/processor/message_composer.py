@@ -22,7 +22,13 @@ async def compose_messages(signals: list) -> list[str]:
         user_message=MESSAGE_COMPOSER_USER_TEMPLATE.format(signals_list=signals_list_text),
         trace_name="message-composer",
         json_schema=MESSAGE_COMPOSER_JSON_SCHEMA,
-        temperature=0.7,
+        # 0.9, higher than anywhere else in the system. Every other call
+        # wants consistency - a scoring call at 0.9 would return different
+        # numbers for the same repo. This one wants the opposite: three
+        # messages in a batch that all open the same way read as
+        # generated, and low temperature is what makes a model reach for
+        # the same construction every time.
+        temperature=0.9,
         # Explicit, for the same reason dedup sets it: the default 1024
         # is a RESPONSE cap and this is the longest structured response
         # in the system - three WhatsApp messages written from three

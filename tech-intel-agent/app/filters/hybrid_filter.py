@@ -56,7 +56,21 @@ async def run_hybrid_filter(
         user_message=user_message,
         trace_name=trace_name,
         json_schema=json_schema,
-        temperature=0.0,   
+        temperature=0.0,
+        # Explicit, and the third place this has bitten after dedup and
+        # the message composer. The default 1024 is a RESPONSE cap, and
+        # on gemini-3.5-flash reasoning tokens are billed against it
+        # while never appearing in the output - so the visible JSON gets
+        # cut well before 1024 tokens of actual content.
+        #
+        # It became a live failure the moment filters gained a "summary"
+        # field: two of nine repos in one run died with
+        # "Unterminated string starting at: line 1 column ...", which is
+        # truncation surfacing as a parse error rather than as "too
+        # long". Both were dead-lettered instead of judged.
+        #
+        # This one call covers all five agents.
+        max_tokens=4096,
     )
 
     scores = result.content
