@@ -30,7 +30,11 @@ async def _send_batch_to_user(channel_user_id: str, messages: list[str]) -> bool
     """Sends a user their full message sequence, spaced apart. Returns True only if every message succeeded."""
     for i, message_text in enumerate(messages):
         try:
-            await send_message(channel_user_id, message_text)
+            # rich=True: every pipeline message is assembled by
+            # message_composer with its model-written fragments escaped.
+            # The responder does NOT do that - its replies are raw model
+            # output and go out plain.
+            await send_message(channel_user_id, message_text, rich=True)
         except Exception as e:
             logger.error(
                 "Failed to send message to user",

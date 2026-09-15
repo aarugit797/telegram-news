@@ -34,7 +34,9 @@ class MessageChannel(ABC):
     name: str
 
     @abstractmethod
-    async def send_message(self, channel_user_id: str, text: str) -> str:
+    async def send_message(
+        self, channel_user_id: str, text: str, rich: bool = False
+    ) -> str:
         """
         Delivers one message and returns the provider's message id.
 
@@ -42,5 +44,11 @@ class MessageChannel(ABC):
         a Telegram chat_id on one channel and an E.164 number on the
         other. Naming it for either would bake one channel's assumption
         into the interface meant to hide it.
+
+        `rich` opts into channel-native markup. OFF by default, and only
+        safe for a caller that ASSEMBLED the message itself and escaped
+        every untrusted fragment in it. Raw model output must never be
+        sent rich - one stray angle bracket becomes a parse error that
+        drops the whole message.
         """
         ...

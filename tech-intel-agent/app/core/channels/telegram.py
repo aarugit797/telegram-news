@@ -53,7 +53,9 @@ class TelegramChannel(MessageChannel):
     def _api(self, method: str) -> str:
         return f"{TELEGRAM_API_BASE}/bot{self._token}/{method}"
 
-    async def send_message(self, channel_user_id: str, text: str) -> str:
+    async def send_message(
+        self, channel_user_id: str, text: str, rich: bool = False
+    ) -> str:
         """
         Returns Telegram's message_id as a string.
 
@@ -61,20 +63,29 @@ class TelegramChannel(MessageChannel):
         try/except decides what a failure means for the batch, and it can
         only do that if the failure actually reaches it.
         """
+        payload: dict = {
+            "chat_id": channel_user_id,
+            "text": text[:MAX_MESSAGE_CHARS],
+            "disable_web_page_preview": True,
+        }
+
+        # parse_mode is OPT-IN and off by default.
+        #
+        # Model-written text regularly contains underscores, asterisks and
+        # angle brackets. Asking Telegram to parse that as markup turns a
+        # stray character into a 400 that drops a real message, so the
+        # responder's replies - raw model output - stay plain.
+        #
+        # The digest is different: it is assembled in
+        # processor/message_composer.py with every model-written fragment
+        # escaped before it goes near a tag. That escaping is what makes
+        # markup safe there and nowhere else, which is why this is a
+        # per-caller decision rather than a global setting.
+        if rich:
+            payload["parse_mode"] = "HTML"
+
         async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.post(
-                self._api("sendMessage"),
-                json={
-                    "chat_id": channel_user_id,
-                    "text": text[:MAX_MESSAGE_CHARS],
-                    # Deliberately no parse_mode. LLM-written text
-                    # regularly contains underscores, asterisks and
-                    # brackets; asking Telegram to parse it as Markdown
-                    # makes a stray character a 400 that drops a real
-                    # message. Plain text always renders.
-                    "disable_web_page_preview": True,
-                },
-            )
+            response = await client.post(self._api("sendMessage"), json=payload)
 
         payload = response.json()
         if not payload.get("ok"):

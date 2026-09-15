@@ -47,6 +47,6 @@ def reset_channel() -> None:
     _channel = None
 
 
-async def send_message(channel_user_id: str, text: str) -> str:
+async def send_message(channel_user_id: str, text: str, rich: bool = False) -> str:
     """Module-level convenience so call sites need not know about the factory."""
-    return await get_channel().send_message(channel_user_id, text)
+    return await get_channel().send_message(channel_user_id, text, rich=rich)
