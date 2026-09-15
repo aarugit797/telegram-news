@@ -66,6 +66,34 @@ class Settings(BaseSettings):
     # whole pipeline. Capping background work at 40% leaves 600 for it.
     llm_rpd_pipeline_fraction: float = 0.4
 
+    # ---- digest delivery ---------------------------------------------------
+    # Two digests a day instead of a continuous stream of 3-signal batches.
+    # Five agents producing against a 3-per-batch cap meant most approved
+    # signals never reached anyone - they starved until cleanup
+    # soft-deleted them at 30 days, after we had already paid to filter,
+    # score and embed them.
+    digest_morning_hour: int = 9
+    digest_morning_minute: int = 0
+    digest_evening_hour: int = 21
+    digest_evening_minute: int = 0
+    max_signals_per_digest: int = 8
+
+    # ---- breaking bypass ---------------------------------------------------
+    # Only AI lab blogs produce genuinely interrupt-worthy news (model
+    # releases, capability announcements), so only they are polled through
+    # the day and only they feed this check.
+    breaking_check_interval_minutes: int = 30
+    # Window of newly-created signals the breaking check looks at. Slightly
+    # wider than the interval so a run that starts late cannot skip past
+    # signals created in the gap.
+    breaking_lookback_minutes: int = 40
+    # Upper bound on urgency classifications per breaking run. The original
+    # unbounded per-cluster classification was a livelock: enough clusters
+    # to exhaust quota meant the run died before anything was sent, and the
+    # next run repeated it forever. This cap is what keeps the check cheap
+    # enough to run every 30 minutes.
+    max_urgency_checks_per_run: int = 6
+
     # ---- per-user daily allowance ----------------------------------------
     # Quota, not dollars - there is no per-call price on a free tier. The
     # scarce resource is the ~3,000 requests/day shared across every

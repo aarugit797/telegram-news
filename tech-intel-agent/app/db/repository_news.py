@@ -8,10 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models_news import Signal, Batch, RejectedSignal
 
-# How many unsent signals one batching run will consider. Named rather
-# than inlined so it is discoverable, and kept a parameter so a caller
-# or a test can override it without editing this file.
-DEFAULT_UNSENT_LIMIT = 40
+# How many unsent signals one digest run will consider. Raised from 40
+# when delivery moved to twice-daily digests: with five agents feeding
+# two runs a day, 40 made the selection pool narrower than actual inflow,
+# so the digest would pick its 8 from an artificially truncated set and
+# the rest would starve without ever being compared.
+DEFAULT_UNSENT_LIMIT = 120
 
 
 async def insert_signal(session: AsyncSession, signal_data: dict) -> Signal:
@@ -84,6 +86,36 @@ async def url_was_rejected(session: AsyncSession, url: str) -> bool:
         )
     )
     return bool(result.scalar())
+
+
+async def get_unsent_signals_since(
+    session: AsyncSession, created_after: datetime, source: str | None = None
+) -> list[Signal]:
+    """
+    Unsent signals created after a cutoff, optionally from one source.
+
+    Used by the breaking check, which runs every few minutes and must not
+    re-examine signals it has already judged. There is no "urgency
+    checked" column, so the window IS the bookkeeping: each run looks only
+    at what appeared since roughly the last one. A signal judged STANDARD
+    falls out of the window and is left for the next digest rather than
+    being classified again every run.
+
+    Ordered newest first - if the cap bites, the freshest items are the
+    ones worth interrupting for.
+    """
+    conditions = [
+        Signal.is_sent == False,   # noqa: E712
+        Signal.is_deleted == False,
+        Signal.created_at >= created_after,
+    ]
+    if source is not None:
+        conditions.append(Signal.source == source)
+
+    result = await session.execute(
+        select(Signal).where(*conditions).order_by(Signal.created_at.desc())
+    )
+    return list(result.scalars().all())
 
 
 async def get_unsent_signals(

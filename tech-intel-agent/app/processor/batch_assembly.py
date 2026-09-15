@@ -2,16 +2,24 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.db.repository_news import create_batch
 
+# Kept as a module constant for anything still importing it, but the
+# digest passes its own limit. It was 3 when delivery was a continuous
+# stream of small batches; a digest carries up to
+# settings.max_signals_per_digest.
 MAX_SIGNALS_PER_BATCH = 3
 
 
-async def assemble_batch(session: AsyncSession, clusters: list[list]):
+async def assemble_batch(
+    session: AsyncSession, clusters: list[list], limit: int | None = None
+):
     """
     Picks each cluster's representative (highest composite_score),
-    ranks all representatives, takes the top MAX_SIGNALS_PER_BATCH, and
-    creates the Batch row with its idempotent UUID.
+    ranks all representatives, takes the top `limit` (defaulting to
+    settings.max_signals_per_digest), and creates the Batch row with its
+    idempotent UUID.
 
     Deliberately does NOT mark signals as sent any more. It used to, and
     that was a data-loss bug: marking happened here, BEFORE
@@ -33,9 +41,10 @@ async def assemble_batch(session: AsyncSession, clusters: list[list]):
     Deliberately does NOT set user_count here - that's only known
     after sender/batch_sender.py actually attempts delivery.
     """
+    max_items = limit if limit is not None else settings.max_signals_per_digest
     representatives = [max(cluster, key=lambda s: s.composite_score) for cluster in clusters]
     representatives.sort(key=lambda s: s.composite_score, reverse=True)
-    top_representatives = representatives[:MAX_SIGNALS_PER_BATCH]
+    top_representatives = representatives[:max_items]
     top_rep_ids = {r.id for r in top_representatives}
 
     all_signal_ids = []
