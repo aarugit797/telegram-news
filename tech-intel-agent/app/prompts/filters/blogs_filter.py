@@ -72,6 +72,20 @@ justification is for.
 If the supplied metadata genuinely does not say what it does, describe only what is
 actually stated rather than inventing capability.
 
+KEEP THE CONCRETE FIGURES. If the source states a number - a percentage, a latency, a
+count, a context length, a version, a parameter size, a benchmark delta - carry it into
+the summary. This matters more than it looks: the digest written from this summary
+cannot recover a number you drop, so a vague summary forces vague wording downstream,
+and the writer is then tempted to invent a figure to fill the gap. Numbers are also the
+single most useful thing you can hand the reader.
+
+Never round, never convert, and never supply a figure the source does not state.
+
+Good:  "A team's account of merging eleven services into two, cutting p99 latency from
+        210ms to 90ms."
+Bad:   "A team's account of merging services and the latency they recovered."
+
+
 Good:  "A Go library that runs database migrations from plain SQL files, with rollback."
 Good:  "A study measuring how retrieval depth changes hallucination rates in RAG systems."
 Bad:   "A novel and impressive approach to migrations that engineers will find useful."
