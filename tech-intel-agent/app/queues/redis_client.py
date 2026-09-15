@@ -43,13 +43,21 @@ def _client_for_db(db: int) -> redis.Redis:
 
 # Redis supports multiple logical databases (0-15) on one instance -
 # this is namespacing WITHIN one Redis process, not physical
-# separation. DB 0 = signal queue, DB 1 = dead letter queue, DB 2 =
-# cache/rate-limiting (used later by the responder).
-_signal_queue_client = _client_for_db(0)
+# separation. DB 0 = delivery queue, DB 1 = dead letter queue, DB 2 =
+# cache/rate-limiting.
+#
+# DB 0 HELD A SIGNAL QUEUE THAT NOTHING READ. All five agents pushed
+# every approved signal id onto it and no consumer ever existed - the
+# batching agent reads unsent signals from Postgres instead, because
+# Redis is not durable across a restart and a signal that has already
+# been fetched, filtered, scored and embedded must not be lost. That
+# was the right call; the push was simply never removed, so the key
+# grew without bound and the module advertised a work queue the system
+# does not use.
+_delivery_client = _client_for_db(0)
 _dead_letter_client = _client_for_db(1)
 _cache_client = _client_for_db(2)
 
-SIGNAL_QUEUE_KEY = "signal_queue"
 DEAD_LETTER_KEY = "dead_letter_queue"
 DELIVERY_QUEUE_KEY = "delivery_queue"
 DELIVERY_INFLIGHT_KEY = "delivery_inflight"
@@ -236,24 +244,6 @@ async def reset_llm_budgets(credential_ids: list[str], tz_name: str) -> None:
         await _cache_client.delete(f"{LLM_COOLDOWN_PREFIX}{cid}")
 
 
-async def push_signal(signal_id: str) -> None:
-    """
-    Called by every agent right after successfully writing an
-    approved signal to the News DB. LPUSH adds to one end of a Redis
-    list; the batching agent drains with RPOP from the other end -
-    together this gives FIFO order (oldest signal processed first).
-    """
-    await _signal_queue_client.lpush(SIGNAL_QUEUE_KEY, signal_id)
-
-
-async def pop_signal() -> str | None:
-    """
-    Used by the batching agent. Returns None if the queue is
-    currently empty rather than blocking/erroring.
-    """
-    return await _signal_queue_client.rpop(SIGNAL_QUEUE_KEY)
-
-
 async def push_dead_letter(context: dict) -> None:
     """
     Used when a single item's processing fails even after being
@@ -272,7 +262,7 @@ async def push_batch_for_delivery(batch_id: str, messages: list[str]) -> None:
     batch afterward.
     """
     payload = json.dumps({"batch_id": batch_id, "messages": messages})
-    await _signal_queue_client.lpush(DELIVERY_QUEUE_KEY, payload)
+    await _delivery_client.lpush(DELIVERY_QUEUE_KEY, payload)
 
 
 async def pop_batch_for_delivery() -> dict | None:
@@ -285,7 +275,7 @@ async def pop_batch_for_delivery() -> dict | None:
     while its signals are already flagged is_sent, so nothing re-batches
     them and the messages are silently never delivered.
     """
-    raw = await _signal_queue_client.rpop(DELIVERY_QUEUE_KEY)
+    raw = await _delivery_client.rpop(DELIVERY_QUEUE_KEY)
     return json.loads(raw) if raw else None
 
 
@@ -307,7 +297,7 @@ async def claim_batch_for_delivery() -> tuple[dict, str] | None:
     Re-serialising the dict would usually produce the same bytes, but
     "usually" is not a property to build queue correctness on.
     """
-    raw = await _signal_queue_client.rpoplpush(DELIVERY_QUEUE_KEY, DELIVERY_INFLIGHT_KEY)
+    raw = await _delivery_client.rpoplpush(DELIVERY_QUEUE_KEY, DELIVERY_INFLIGHT_KEY)
     if not raw:
         return None
     return json.loads(raw), raw
@@ -315,7 +305,7 @@ async def claim_batch_for_delivery() -> tuple[dict, str] | None:
 
 async def complete_batch_delivery(raw: str) -> None:
     """Delivery succeeded - remove the batch from the in-flight list."""
-    await _signal_queue_client.lrem(DELIVERY_INFLIGHT_KEY, 1, raw)
+    await _delivery_client.lrem(DELIVERY_INFLIGHT_KEY, 1, raw)
 
 
 async def release_batch_delivery(raw: str) -> None:
@@ -324,13 +314,13 @@ async def release_batch_delivery(raw: str) -> None:
     retries it. RPUSH rather than LPUSH so it lands at the end the
     consumer reads from, preserving FIFO order.
     """
-    await _signal_queue_client.lrem(DELIVERY_INFLIGHT_KEY, 1, raw)
-    await _signal_queue_client.rpush(DELIVERY_QUEUE_KEY, raw)
+    await _delivery_client.lrem(DELIVERY_INFLIGHT_KEY, 1, raw)
+    await _delivery_client.rpush(DELIVERY_QUEUE_KEY, raw)
 
 
 async def inflight_batches() -> list[str]:
     """Batches claimed but neither completed nor released - i.e. crashed mid-send."""
-    return await _signal_queue_client.lrange(DELIVERY_INFLIGHT_KEY, 0, -1)
+    return await _delivery_client.lrange(DELIVERY_INFLIGHT_KEY, 0, -1)
 
 
 async def increment_rate_limit(user_id: str) -> int:

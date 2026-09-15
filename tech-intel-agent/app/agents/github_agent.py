@@ -22,7 +22,7 @@ from app.prompts.filters.github_filter import (
     GITHUB_FILTER_USER_TEMPLATE,
     GITHUB_FILTER_JSON_SCHEMA,
 )
-from app.queues.redis_client import push_signal, push_dead_letter
+from app.queues.redis_client import push_dead_letter
 
 logger = get_logger(__name__)
 
@@ -257,7 +257,6 @@ async def run_github_agent() -> None:
                     "embedding": embedding,
                 })
 
-                await push_signal(str(signal.id))
                 counts["approved"] += 1
 
             except LLMQuotaExhausted as e:

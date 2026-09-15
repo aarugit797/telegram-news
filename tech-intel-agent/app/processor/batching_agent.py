@@ -37,6 +37,20 @@ async def run_digest() -> None:
     after we had already paid to filter, score and embed them. Two
     digests of up to 8 clears realistic inflow.
 
+    POSTGRES IS THE SOURCE OF TRUTH FOR UNSENT SIGNALS, and this is a
+    durability decision rather than a convenience one. A signal that
+    reaches this point has been fetched, filtered against the rules,
+    scored by an LLM and embedded - it is expensive and it is not
+    reproducible, because the trending list that produced it has already
+    moved on. Redis is not durable across a restart, so anything held
+    only there can vanish silently and nobody would know a signal had
+    been dropped. `is_sent = false` in Postgres survives a crash, and a
+    digest that runs late still finds everything waiting for it.
+
+    The agents used to ALSO push each approved signal id onto a Redis
+    list, which nothing ever read. That push is gone; this is the
+    reasoning it used to imply.
+
     ORDERING IS THE CORRECTNESS PROPERTY. The database flag is the LAST
     thing that happens:
 
