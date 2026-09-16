@@ -4,6 +4,7 @@ from app.core.config import settings
 from app.core.llm_client import call_llm
 from app.prompts.responder.news_qa import NEWS_QA_SYSTEM_PROMPT, NEWS_QA_USER_TEMPLATE
 from app.queues.redis_client import increment_rate_limit
+from app.responder.query_rewriter import rewrite_for_retrieval
 
 _tavily_client = AsyncTavilyClient(api_key=settings.tavily_api_key)
 
@@ -36,7 +37,15 @@ async def run_web_search_tool(
             [],
         )
 
-    response = await _tavily_client.search(question, max_results=3)
+    # Same split as news_db: the SEARCH gets the resolved query, the
+    # answer is written against the original. A web search on "how do I
+    # install it?" is even weaker than a bad embedding - Tavily has no
+    # conversation to fall back on at all.
+    #
+    # Rewriting happens after the rate-limit check, so a user who is out
+    # of searches does not spend an LLM call discovering that.
+    search_query = await rewrite_for_retrieval(question, context)
+    response = await _tavily_client.search(search_query, max_results=3)
     results = response.get("results", [])
 
     if not results:
