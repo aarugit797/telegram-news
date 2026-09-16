@@ -4,7 +4,7 @@ from app.prompts.responder.intent_classifier import (
 )
 
 
-async def classify_intent(message: str) -> str:
+async def classify_intent(message: str, context: str = "") -> str:
     """
     Runs only on messages that passed the guardrail. Returns one of
     SMALLTALK | NEWS_QUERY | NOTIFICATION_FOLLOWUP | WEB_QUESTION,
@@ -12,7 +12,9 @@ async def classify_intent(message: str) -> str:
     """
     result = await call_llm(
         system_prompt=INTENT_CLASSIFIER_SYSTEM_PROMPT,
-        user_message=INTENT_CLASSIFIER_USER_TEMPLATE.format(message=message),
+        user_message=INTENT_CLASSIFIER_USER_TEMPLATE.format(
+            context=context or "(nothing yet)", message=message
+        ),
         trace_name="intent-classifier",
         json_schema=INTENT_CLASSIFIER_JSON_SCHEMA,
         temperature=0.0,

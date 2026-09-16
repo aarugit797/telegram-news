@@ -6,7 +6,9 @@ from app.prompts.responder.notification_followup import (
 )
 
 
-async def run_notification_history_tool(question: str, user_id: str) -> tuple[str, list]:
+async def run_notification_history_tool(
+    question: str, user_id: str, context: str = ""
+) -> tuple[str, list]:
     """
     Answers follow-up questions about what was already sent, including
     numeric references like "tell me more about 3" - the retrieved
@@ -40,14 +42,29 @@ async def run_notification_history_tool(question: str, user_id: str) -> tuple[st
     # Numbered to match what the reader actually saw. A digest of 8 items
     # makes "tell me more about the second repo" unresolvable without
     # these - the model has no way to know which of eight is meant.
+    # THE LINK IS INCLUDED so the tool can hand the reader somewhere to
+    # go. Without it, a question the stored content cannot answer - "how
+    # do I install it?" - produced a flat "the stored content does not
+    # contain installation instructions", which is honest and useless.
+    # Naming the item's own url is not a guess, so it costs nothing in
+    # accuracy.
+    #
+    # 2000 characters of stored content rather than 800: install steps,
+    # the most common follow-up, sit below the badges and feature list
+    # that fill the first 800 of a README.
     signals_text = "\n\n".join(
-        f"Item {i}\nTitle: {s.title}\nSummary: {s.summary}\nDetails: {s.full_content[:800]}"
+        f"Item {i}\nTitle: {s.title}\nLink: {s.url}\nSummary: {s.summary}\n"
+        f"Details: {s.full_content[:2000]}"
         for i, s in enumerate(signals, start=1)
     )
 
     result = await call_llm(
         system_prompt=NOTIFICATION_FOLLOWUP_SYSTEM_PROMPT,
-        user_message=NOTIFICATION_FOLLOWUP_USER_TEMPLATE.format(signals=signals_text, question=question),
+        user_message=NOTIFICATION_FOLLOWUP_USER_TEMPLATE.format(
+            signals=signals_text,
+            context=context or "(no earlier messages)",
+            question=question,
+        ),
         trace_name="notification-history-tool",
         temperature=0.3,
         # Reserved lane - a user is waiting on this reply.

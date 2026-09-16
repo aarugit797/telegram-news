@@ -16,7 +16,9 @@ DAILY_WEB_SEARCH_LIMIT = 10
 WEB_SEARCH_RATE_KEY_PREFIX = "web_search_limit:"
 
 
-async def run_web_search_tool(question: str, user_id: str) -> tuple[str, list]:
+async def run_web_search_tool(
+    question: str, user_id: str, context: str = ""
+) -> tuple[str, list]:
     """
     For questions about something very recent our own scheduled
     agents likely haven't caught yet. Rate limited separately and
@@ -47,7 +49,11 @@ async def run_web_search_tool(question: str, user_id: str) -> tuple[str, list]:
 
     result = await call_llm(
         system_prompt=NEWS_QA_SYSTEM_PROMPT,
-        user_message=NEWS_QA_USER_TEMPLATE.format(retrieved_signals=retrieved_text, question=question),
+        user_message=NEWS_QA_USER_TEMPLATE.format(
+            retrieved_signals=retrieved_text,
+            context=context or "(no earlier messages)",
+            question=question,
+        ),
         trace_name="web-search-tool",
         temperature=0.3,
         # Reserved lane - a user is waiting on this reply.

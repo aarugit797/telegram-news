@@ -19,7 +19,7 @@ from app.responder.guardrail import check_guardrail
 from app.responder.intent_classifier import classify_intent
 from app.responder.rate_limit import check_and_increment_rate_limit
 from app.responder.response_composer import compose_final_response
-from app.responder.token_budget import get_conversation_context
+from app.responder.token_budget import get_conversation_context, get_recent_turns
 from app.responder.whitelist import check_whitelist, ensure_user_record
 
 logger = get_logger(__name__)
@@ -103,20 +103,34 @@ async def process_message(from_number: str, message_body: str) -> None:
             await send_message(from_number, FIXED_RESPONSES["off_topic"])
             return
 
-        intent = await classify_intent(message_body)
+        # TWO DIFFERENT VIEWS OF THE HISTORY, on purpose.
+        #
+        # The classifier gets the last few raw turns only. It is deciding
+        # whether "is it useful for me?" contains a pronoun pointing at
+        # the previous turn - a summary of last week cannot help with
+        # that, and get_conversation_context can fire the summarizer LLM
+        # call, which would put a second model in front of a routing
+        # decision that has to be fast.
+        #
+        # The tools get the full compressed context, because they are the
+        # ones that must actually resolve the referent and answer about
+        # it.
+        recent_turns = await get_recent_turns(user.id)
+        intent = await classify_intent(message_body, recent_turns)
 
-        # NOTE - conversation context IS computed here (compressed
-        # summary + recent raw history) but no current tool actually
-        # consumes it - each tool only takes the current message. This is
-        # a known v1 simplification, not a silent oversight: multi-turn
-        # context awareness within a tool call is a real gap worth
-        # closing before this handles genuinely long conversations well.
+        # This used to be assigned to _context and never read, so every
+        # tool saw the current message alone. The live failure: a reader
+        # asked about a repo, then asked "is it useful for me?" and was
+        # told about the bot's own features, because nothing in the chain
+        # knew what "it" was.
         #
         # Its history-summarizer LLM call runs inside this function, so
         # it IS captured by the accounting above.
-        _context = await get_conversation_context(user.id)
+        context = await get_conversation_context(user.id)
 
-        agent_result = await run_conversational_agent(intent, message_body, str(user.id))
+        agent_result = await run_conversational_agent(
+            intent, message_body, str(user.id), context
+        )
         final_reply = await compose_final_response(agent_result["output"])
 
         await send_message(from_number, final_reply)

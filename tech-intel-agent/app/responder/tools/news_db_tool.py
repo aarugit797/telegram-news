@@ -5,7 +5,7 @@ from app.db.session_news import get_news_session
 from app.prompts.responder.news_qa import NEWS_QA_SYSTEM_PROMPT, NEWS_QA_USER_TEMPLATE
 
 
-async def run_news_db_tool(question: str) -> tuple[str, list]:
+async def run_news_db_tool(question: str, context: str = "") -> tuple[str, list]:
     """
     The RAG tool. Embeds the user's question with input_type="query"
     (asymmetric embedding - deliberately different from "document",
@@ -31,7 +31,11 @@ async def run_news_db_tool(question: str) -> tuple[str, list]:
 
     result = await call_llm(
         system_prompt=NEWS_QA_SYSTEM_PROMPT,
-        user_message=NEWS_QA_USER_TEMPLATE.format(retrieved_signals=retrieved_text, question=question),
+        user_message=NEWS_QA_USER_TEMPLATE.format(
+            retrieved_signals=retrieved_text,
+            context=context or "(no earlier messages)",
+            question=question,
+        ),
         trace_name="news-db-tool",
         temperature=0.3,
         # Reserved lane - a user is waiting on this reply.

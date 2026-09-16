@@ -2,7 +2,7 @@ from app.core.llm_client import call_llm
 from app.prompts.responder.smalltalk import SMALLTALK_SYSTEM_PROMPT, SMALLTALK_USER_TEMPLATE
 
 
-async def run_smalltalk_tool(message: str) -> str:
+async def run_smalltalk_tool(message: str, context: str = "") -> str:
     """
     No database call at all - direct LLM response with the persona
     prompt. Highest temperature-appropriate of the classification
@@ -11,7 +11,9 @@ async def run_smalltalk_tool(message: str) -> str:
     """
     result = await call_llm(
         system_prompt=SMALLTALK_SYSTEM_PROMPT,
-        user_message=SMALLTALK_USER_TEMPLATE.format(message=message),
+        user_message=SMALLTALK_USER_TEMPLATE.format(
+            context=context or "(no earlier messages)", message=message
+        ),
         trace_name="smalltalk-tool",
         temperature=0.7,
         # 1024, not a tight cap. max_tokens looks like a brevity lever but

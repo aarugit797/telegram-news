@@ -12,31 +12,41 @@ class AgentState(TypedDict):
     intent: str
     message_text: str
     user_id: str
+    # The compressed conversation history for this turn. Every tool gets
+    # it, because an unresolved pronoun can land in any of them - the
+    # live failure was "is it useful for me?" reaching the smalltalk tool
+    # with no referent, but "how do I install it?" would reach
+    # notification_history just as blind.
+    context: str
     tool_output: str
     source_signals: list
 
 
 async def _smalltalk_node(state: AgentState) -> AgentState:
-    state["tool_output"] = await run_smalltalk_tool(state["message_text"])
+    state["tool_output"] = await run_smalltalk_tool(state["message_text"], state["context"])
     return state
 
 
 async def _news_db_node(state: AgentState) -> AgentState:
-    output, signals = await run_news_db_tool(state["message_text"])
+    output, signals = await run_news_db_tool(state["message_text"], state["context"])
     state["tool_output"] = output
     state["source_signals"] = signals
     return state
 
 
 async def _notification_history_node(state: AgentState) -> AgentState:
-    output, signals = await run_notification_history_tool(state["message_text"], state["user_id"])
+    output, signals = await run_notification_history_tool(
+        state["message_text"], state["user_id"], state["context"]
+    )
     state["tool_output"] = output
     state["source_signals"] = signals
     return state
 
 
 async def _web_search_node(state: AgentState) -> AgentState:
-    output, sources = await run_web_search_tool(state["message_text"], state["user_id"])
+    output, sources = await run_web_search_tool(
+        state["message_text"], state["user_id"], state["context"]
+    )
     state["tool_output"] = output
     state["source_signals"] = sources
     return state
@@ -86,7 +96,9 @@ def _build_graph():
 _compiled_graph = _build_graph()
 
 
-async def run_conversational_agent(intent: str, message_text: str, user_id: str) -> dict:
+async def run_conversational_agent(
+    intent: str, message_text: str, user_id: str, context: str = ""
+) -> dict:
     """
     Runs the compiled graph - routes to exactly one tool node based
     on the already-classified intent, returns that tool's output plus
@@ -95,7 +107,7 @@ async def run_conversational_agent(intent: str, message_text: str, user_id: str)
     """
     initial_state: AgentState = {
         "intent": intent, "message_text": message_text, "user_id": user_id,
-        "tool_output": "", "source_signals": [],
+        "context": context, "tool_output": "", "source_signals": [],
     }
     final_state = await _compiled_graph.ainvoke(initial_state)
     return {"output": final_state["tool_output"], "source_signals": final_state["source_signals"]}

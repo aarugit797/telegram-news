@@ -11,6 +11,28 @@ SUMMARIZE_SYSTEM_PROMPT = (
 )
 
 
+async def get_recent_turns(user_id, turns: int = 3) -> str:
+    """
+    The last few raw messages, for the intent classifier.
+
+    Deliberately NOT get_conversation_context: that one may fire the
+    history summarizer, and the classifier does not need a summary of
+    last week to tell whether "is it useful for me?" contains a pronoun.
+    It needs the turn immediately before. This is one indexed read and no
+    LLM call.
+
+    SKIPS THE NEWEST ROW. process_message saves the inbound message
+    before classifying, so the most recent row IS the message being
+    classified - including it would just show the model its own input
+    twice and push the actual referent out of the window.
+    """
+    async with get_conversation_session() as session:
+        recent = await get_recent_messages(session, user_id, limit=turns + 1)
+
+    previous = recent[1:] if recent else []
+    return "\n".join(f"[{m.direction}] {m.message_text}" for m in reversed(previous))
+
+
 async def get_conversation_context(user_id) -> str:
     """
     Called before the conversational agent runs. Returns one string
