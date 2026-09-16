@@ -244,6 +244,53 @@ async def reset_llm_budgets(credential_ids: list[str], tz_name: str) -> None:
         await _cache_client.delete(f"{LLM_COOLDOWN_PREFIX}{cid}")
 
 
+# Held by the single running Telegram poller. The TTL is what makes this
+# safe to use from a process that can be killed: a crashed poller cannot
+# release the lock, so the lock has to expire on its own. Refreshed every
+# cycle, so it only lapses if the poller stops making progress.
+POLLER_LOCK_KEY = "telegram_poller_lock"
+POLLER_LOCK_TTL_SECONDS = 60
+
+# Identifies THIS process, so release_poller_lock cannot delete a lock
+# that a different poller has since acquired - the classic delete-someone-
+# else's-lock race after an expiry.
+_POLLER_TOKEN = uuid.uuid4().hex
+
+_RELEASE_LOCK_LUA = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+  return redis.call('del', KEYS[1])
+end
+return 0
+"""
+
+
+async def acquire_poller_lock(refresh: bool = False) -> bool:
+    """
+    Claims the single-poller slot. Returns False if another live poller
+    already holds it.
+
+    refresh=True re-stamps a lock this process already owns. It uses the
+    same compare-then-set as release, so a poller that lost its lock
+    (expired while wedged, taken by another instance) does NOT silently
+    steal it back.
+    """
+    if refresh:
+        held = await _cache_client.get(POLLER_LOCK_KEY)
+        if held == _POLLER_TOKEN:
+            await _cache_client.expire(POLLER_LOCK_KEY, POLLER_LOCK_TTL_SECONDS)
+            return True
+        return False
+
+    return bool(await _cache_client.set(
+        POLLER_LOCK_KEY, _POLLER_TOKEN, nx=True, ex=POLLER_LOCK_TTL_SECONDS
+    ))
+
+
+async def release_poller_lock() -> None:
+    """Drops the lock, but only if this process still owns it."""
+    await _cache_client.eval(_RELEASE_LOCK_LUA, 1, POLLER_LOCK_KEY, _POLLER_TOKEN)
+
+
 async def push_dead_letter(context: dict) -> None:
     """
     Used when a single item's processing fails even after being

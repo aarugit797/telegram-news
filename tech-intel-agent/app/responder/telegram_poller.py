@@ -27,6 +27,7 @@ import httpx
 
 from app.core.config import settings
 from app.core.logging_config import get_logger
+from app.queues.redis_client import acquire_poller_lock, release_poller_lock
 from app.responder.message_handler import process_message
 
 logger = get_logger(__name__)
@@ -149,22 +150,55 @@ async def run_telegram_poller() -> None:
     """
     Polls forever. Entrypoint for the responder process when
     active_channel is telegram.
+
+    ONLY ONE POLLER MAY RUN AT A TIME, and that is enforced here rather
+    than assumed. The offset is a local variable, so it protects against
+    re-processing WITHIN one process and can do nothing about a second
+    process holding its own copy. Two pollers therefore each fetch the
+    same update and each run the full chain on it.
+
+    That is not hypothetical. Two instances ran against one bot and every
+    message produced two inbound rows and two replies - and because the
+    chain is non-deterministic, the two replies could disagree: one pass
+    failed to resolve an item number and sent "I'm not sure which repo
+    you mean", while the other resolved it correctly and answered. The
+    reader saw a clarifying question immediately followed by the answer
+    to the question it had just asked.
+
+    The lock has a TTL and is refreshed each cycle, so a killed poller
+    frees it within a minute rather than locking the bot out forever.
     """
     if not settings.telegram_bot_token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set - the poller cannot start")
 
+    if not await acquire_poller_lock():
+        # Deliberately a hard stop, not a warning-and-continue. A second
+        # poller that keeps running IS the bug; the only safe thing it
+        # can do is not poll.
+        raise RuntimeError(
+            "Another Telegram poller holds the lock - refusing to start a second one. "
+            "Stop the running poller first, or wait for its lock to expire."
+        )
+
     logger.info("Telegram poller starting")
     offset: int | None = None
 
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
-        while True:
-            try:
-                offset = await poll_once(client, offset)
-            except Exception as e:
-                # A network blip must not kill the loop. Backing off
-                # briefly avoids hammering Telegram while it is unhappy.
-                logger.error(
-                    "Telegram poll cycle failed",
-                    extra={"extra_fields": {"error": str(e), "error_type": type(e).__name__}},
-                )
-                await asyncio.sleep(5)
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
+            while True:
+                try:
+                    offset = await poll_once(client, offset)
+                    # Refreshed after real work, so a wedged poller that
+                    # stops making progress eventually drops the lock and
+                    # lets a healthy one take over.
+                    await acquire_poller_lock(refresh=True)
+                except Exception as e:
+                    # A network blip must not kill the loop. Backing off
+                    # briefly avoids hammering Telegram while it is unhappy.
+                    logger.error(
+                        "Telegram poll cycle failed",
+                        extra={"extra_fields": {"error": str(e), "error_type": type(e).__name__}},
+                    )
+                    await asyncio.sleep(5)
+    finally:
+        await release_poller_lock()
