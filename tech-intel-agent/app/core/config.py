@@ -76,7 +76,26 @@ class Settings(BaseSettings):
     digest_morning_minute: int = 0
     digest_evening_hour: int = 21
     digest_evening_minute: int = 0
-    max_signals_per_digest: int = 8
+    # Was 8. Readers said a morning digest of 8 was more than they would
+    # get through, and an item nobody reads is worse than one that was
+    # never sent - it trains them to skim past the whole message.
+    max_signals_per_digest: int = 5
+
+    # Per-source MAXIMUMS for one digest, as "source:n" pairs.
+    #
+    # Selection used to be purely top-N by composite_score, which is
+    # source-blind: one real digest came out as 5 GitHub repos, 1
+    # newsletter and 1 blog, because GitHub happened to score well that
+    # day. Nothing was wrong with those scores - the problem is that a
+    # digest of five repos is a different product from a digest of the
+    # day's tech news.
+    #
+    # A raw string parsed by digest_source_caps() rather than a dict
+    # field, for the same reason gemini_api_keys is a string:
+    # pydantic-settings JSON-decodes complex types from env vars before
+    # any validator runs, so a plain "github:2,arxiv:1" in .env would
+    # raise SettingsError rather than parse.
+    digest_source_caps: str = "github:2,arxiv:1,blogs:1,rss:1,hackernews:1"
 
     # ---- breaking bypass ---------------------------------------------------
     # Only AI lab blogs produce genuinely interrupt-worthy news (model
@@ -167,6 +186,26 @@ class Settings(BaseSettings):
     # and another on an EC2 box running UTC - the jobs would silently
     # fire at different real-world times per deployment.
     scheduler_timezone: str = "Asia/Kolkata"
+
+    def digest_source_caps_map(self) -> dict[str, int]:
+        """
+        Parsed DIGEST_SOURCE_CAPS as {source: max_items}.
+
+        A source missing from the string has no cap of its own and can
+        only enter a digest through the fill step, which is the sensible
+        default for a source this config has not been told about.
+        """
+        caps: dict[str, int] = {}
+        for pair in self.digest_source_caps.split(","):
+            pair = pair.strip()
+            if not pair or ":" not in pair:
+                continue
+            source, _, raw = pair.partition(":")
+            try:
+                caps[source.strip()] = int(raw)
+            except ValueError:
+                continue
+        return caps
 
     def gemini_keys(self) -> list[str]:
         """Parsed GEMINI_API_KEYS - order preserved, blanks and duplicates dropped."""

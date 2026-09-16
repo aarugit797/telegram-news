@@ -115,3 +115,95 @@ def test_ordering_groups_by_source_even_though_labels_are_hidden():
     signals = [signal(source="hackernews", score=5.0), signal(source="github", score=1.0),
                signal(source="hackernews", score=4.0)]
     assert [s.source for s in order_for_digest(signals)] == ["github", "hackernews", "hackernews"]
+
+
+# --------------------------------------------------------------------------
+# Source-cap selection. Pure and deterministic, so it is worth pinning
+# hard: the fill step is the part most likely to be "simplified" later by
+# someone who reads the caps as reservations.
+# --------------------------------------------------------------------------
+from app.processor.batch_assembly import _select_with_source_caps
+
+
+def rep(source, score):
+    return SimpleNamespace(source=source, composite_score=score,
+                           title=f"{source}-{score}", id=f"{source}-{score}")
+
+
+def sources(selected):
+    out = {}
+    for s in selected:
+        out[s.source] = out.get(s.source, 0) + 1
+    return out
+
+
+def test_one_source_cannot_crowd_out_the_digest():
+    """
+    The real failure this exists to stop: 5 GitHub repos and nothing
+    else. With enough sources present to fill the digest from capped
+    slots alone, GitHub is held to exactly its cap.
+    """
+    candidates = [rep("github", 5.0 - i * 0.1) for i in range(10)]
+    candidates += [rep("arxiv", 3.9), rep("arxiv", 3.8)]
+    candidates += [rep("blogs", 3.7), rep("blogs", 3.6)]
+    candidates += [rep("rss", 3.5), rep("hackernews", 3.4)]
+    picked = _select_with_source_caps(candidates, 5)
+    assert len(picked) == 5
+    assert sources(picked)["github"] == 2
+
+
+def test_a_cap_is_exceeded_only_by_exactly_the_shortfall():
+    """
+    Three sources present (10 github, 2 arxiv, 3 blogs) offer just
+    2+1+1 = 4 capped slots against a digest of 5, so the fill step must
+    take one more. It takes the single highest-scoring leftover - GitHub
+    - and stops there. GitHub reaches 3, never 4 or 5.
+    """
+    candidates = [rep("github", 5.0 - i * 0.1) for i in range(10)]
+    candidates += [rep("arxiv", 3.9), rep("arxiv", 3.8)]
+    candidates += [rep("blogs", 3.7), rep("blogs", 3.6), rep("blogs", 3.5)]
+    picked = _select_with_source_caps(candidates, 5)
+    assert len(picked) == 5
+    assert sources(picked)["github"] == 3
+
+
+def test_fill_step_may_exceed_a_source_cap_to_keep_the_digest_full():
+    """
+    Caps are maximums, not reservations. With only two sources present
+    there are not enough capped slots, so the fill step must push past
+    a cap rather than ship a short digest.
+    """
+    candidates = [rep("github", 5.0 - i * 0.1) for i in range(6)]
+    candidates += [rep("blogs", 4.0), rep("blogs", 3.9)]
+    picked = _select_with_source_caps(candidates, 5)
+    assert len(picked) == 5
+    assert sources(picked)["github"] > 2
+
+
+def test_fewer_candidates_than_the_cap_sends_what_exists():
+    candidates = [rep("github", 4.5), rep("arxiv", 4.2), rep("rss", 4.0)]
+    picked = _select_with_source_caps(candidates, 5)
+    assert len(picked) == 3
+
+
+def test_result_is_ranked_by_score():
+    candidates = [rep("github", 4.0), rep("arxiv", 4.9), rep("blogs", 4.5)]
+    picked = _select_with_source_caps(candidates, 5)
+    assert [s.composite_score for s in picked] == [4.9, 4.5, 4.0]
+
+
+def test_highest_scoring_item_of_a_capped_source_is_the_one_kept():
+    """Within a source the cap must take the best, not the first seen."""
+    candidates = [rep("github", 5.0), rep("github", 4.9), rep("github", 1.0),
+                  rep("arxiv", 4.0)]
+    picked = _select_with_source_caps(candidates, 3)
+    gh = sorted(s.composite_score for s in picked if s.source == "github")
+    assert gh == [4.9, 5.0]
+
+
+def test_unknown_source_enters_only_through_the_fill_step():
+    """A source absent from the caps config has no reserved slot."""
+    candidates = [rep("github", 4.0), rep("arxiv", 3.9), rep("mystery", 5.0)]
+    picked = _select_with_source_caps(candidates, 3)
+    assert len(picked) == 3
+    assert any(s.source == "mystery" for s in picked)
