@@ -3,7 +3,7 @@ from datetime import datetime, date
 
 from app.core.time import utcnow
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -125,6 +125,73 @@ async def get_recent_messages(
         select(Message)
         .where(Message.user_id == user_id, Message.is_deleted == False)  # noqa: E712
         .order_by(Message.timestamp.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+def _between(user_id: uuid.UUID, after: datetime | None, before: datetime | None):
+    """
+    Shared filter for the rolling-summary reads below.
+
+    `after` is the previous summary's covers_to, so the window starts
+    where the last summary stopped - which is what makes the summary
+    accumulate instead of sliding. `before` is the oldest message being
+    kept raw, so the summary never duplicates the tail the caller is
+    about to send verbatim.
+
+    Both bounds are exclusive. covers_to IS the timestamp of a message
+    already folded in, so `>` rather than `>=` is what stops that message
+    being summarised twice.
+    """
+    conditions = [Message.user_id == user_id, Message.is_deleted == False]  # noqa: E712
+    if after is not None:
+        conditions.append(Message.timestamp > after)
+    if before is not None:
+        conditions.append(Message.timestamp < before)
+    return conditions
+
+
+async def count_messages_between(
+    session: AsyncSession, user_id: uuid.UUID,
+    after: datetime | None = None, before: datetime | None = None,
+) -> int:
+    """
+    How many messages are waiting to be summarised.
+
+    A COUNT rather than len() of a fetch: this runs on EVERY inbound
+    message to decide whether the summarizer is worth calling, and all
+    the caller needs is a number. Fetching the rows to count them would
+    make the common answer - "not yet" - the expensive one.
+    """
+    result = await session.execute(
+        select(func.count()).select_from(Message).where(*_between(user_id, after, before))
+    )
+    return int(result.scalar() or 0)
+
+
+async def get_messages_between(
+    session: AsyncSession, user_id: uuid.UUID,
+    after: datetime | None = None, before: datetime | None = None,
+    limit: int = 200,
+) -> list[Message]:
+    """
+    The messages to fold into the next summary, OLDEST FIRST - summaries
+    read as narrative, so the model should see them in the order they
+    happened.
+
+    The limit is a safety rail, not a window. Regeneration is triggered
+    every SUMMARY_REFRESH_EVERY messages, so the backlog is normally a
+    fraction of this; 200 only matters if summarisation has been broken
+    or disabled for a long stretch, and there it prevents one enormous
+    prompt rather than silently dropping history the way a fixed window
+    would. When it does bite, the oldest messages are the ones kept,
+    since covers_to then advances and the rest are folded in next time.
+    """
+    result = await session.execute(
+        select(Message)
+        .where(*_between(user_id, after, before))
+        .order_by(Message.timestamp.asc())
         .limit(limit)
     )
     return list(result.scalars().all())
