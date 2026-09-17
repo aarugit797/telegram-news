@@ -86,6 +86,24 @@ async def run_digest() -> None:
             ordered = order_for_digest(top_signals)
             ordered_ids = [s.id for s in ordered]
 
+            # THE ORDER IS THE CONTRACT, so it has to be the order that is
+            # STORED. This line used to be missing: ordered_ids was
+            # computed, logged, and thrown away, while the row kept the
+            # list assemble_batch built - which is cluster order, and
+            # which also contains the duplicate cluster members that were
+            # never displayed. So the stored sequence matched neither the
+            # numbering nor the length of what the reader saw, and "the
+            # second point" resolved to whatever happened to sit second
+            # in that list. In one real digest the reader's item 1 was
+            # stored fourth.
+            #
+            # The fuller list stays local, because marking-as-sent has
+            # the opposite requirement: it must cover every clustered
+            # duplicate so none is re-considered next run. One field
+            # cannot serve both, and the row's job is the numbering.
+            batch.signal_ids = ordered_ids
+            await session.commit()
+
             parts = await compose_digest(ordered)
 
             for part in parts:

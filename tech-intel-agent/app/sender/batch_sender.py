@@ -1,9 +1,11 @@
 import asyncio
+import re
 import uuid
+from html import unescape
 
 from app.core.logging_config import get_logger
 from app.core.channels import get_channel, send_message
-from app.db.repository_conversation import get_active_users
+from app.db.repository_conversation import get_active_users, save_message
 from app.db.repository_news import update_batch_delivery
 from app.db.session_conversation import get_conversation_session
 from app.db.session_news import get_news_session
@@ -24,6 +26,52 @@ logger = get_logger(__name__)
 # than inside each channel because it is a product decision - how a batch
 # should FEEL to read - that happens to also clear the technical floor.
 MESSAGE_DELAY_SECONDS = 2
+
+
+_TAGS = re.compile(r"<[^>]+>")
+
+
+async def _record_digest_in_conversation(user_id, messages: list[str]) -> None:
+    """
+    Writes the delivered digest into the conversation history.
+
+    WITHOUT THIS THE RESPONDER DOES NOT KNOW IT SENT ANYTHING. Every part
+    of the conversation side - the guardrail, the intent classifier, the
+    rolling summary, pronoun resolution - reads the messages table, and
+    the digest went out through a different process entirely and was
+    never written there. The effects were not subtle:
+
+      - "Can u describe the second point a bit" was classified
+        NEWS_QUERY, because with an empty history there was nothing for
+        "the second point" to point AT. It went to vector search and
+        answered about a different item.
+      - "Tell me more about yue" was rejected as OFF_TOPIC. To a
+        guardrail with no history, "yue" is an unfamiliar token in a
+        short message; the digest that introduced YuE minutes earlier
+        was invisible to it.
+
+    Tags are stripped because the stored copy is prompt input, not
+    something to re-render - the reader already saw the bold version, and
+    leaving markup in means every downstream prompt pays for it.
+
+    NEVER RAISES. This runs after the reader already has the message, so
+    a failure here must not turn a delivered digest into a failed one.
+    """
+    text = "\n\n".join(unescape(_TAGS.sub("", part)) for part in messages)
+    try:
+        async with get_conversation_session() as session:
+            await save_message(session, {
+                "user_id": user_id,
+                "direction": "outbound",
+                "message_text": text,
+            })
+    except Exception as e:
+        logger.warning(
+            "Digest delivered but not recorded in conversation history",
+            extra={"extra_fields": {
+                "user_id": str(user_id), "error": str(e), "error_type": type(e).__name__,
+            }},
+        )
 
 
 async def _send_batch_to_user(channel_user_id: str, messages: list[str]) -> bool:
@@ -88,6 +136,7 @@ async def run_sender_worker() -> None:
         success = await _send_batch_to_user(user.channel_user_id, messages)
         if success:
             delivered_count += 1
+            await _record_digest_in_conversation(user.id, messages)
         else:
             await push_dead_letter({
                 "component": "batch_sender",
