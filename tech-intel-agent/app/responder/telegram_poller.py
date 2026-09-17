@@ -22,12 +22,18 @@ only job is to turn an update into the (chat_id, text) pair
 process_message already takes.
 """
 import asyncio
+import random
 
 import httpx
+import sentry_sdk
 
 from app.core.config import settings
 from app.core.logging_config import get_logger
-from app.queues.redis_client import acquire_poller_lock, release_poller_lock
+from app.queues.redis_client import (
+    acquire_poller_lock,
+    push_dead_letter,
+    release_poller_lock,
+)
 from app.responder.message_handler import process_message
 
 logger = get_logger(__name__)
@@ -75,20 +81,41 @@ def _extract(update: dict) -> tuple[str, str] | None:
     return str(chat_id), text
 
 
-async def poll_once(client: httpx.AsyncClient, offset: int | None) -> int | None:
+async def poll_once(
+    client: httpx.AsyncClient, offset: int | None, attempts: dict[int, int]
+) -> int | None:
     """
     One getUpdates cycle. Returns the next offset to use.
 
     OFFSET TRACKING is what stops an update being processed twice.
     Telegram keeps redelivering an update until it is acknowledged, and
     the acknowledgement is implicit: requesting offset = last_update_id+1
-    tells Telegram everything below that is handled. Without it, every
-    poll would replay the same message and re-run the whole paid agent
-    chain on it.
+    tells Telegram everything below that is handled.
 
-    The offset is advanced only AFTER a message is processed, so a crash
-    mid-processing means Telegram redelivers it - at-least-once, matching
-    the delivery property the rest of the pipeline is built on.
+    THE OFFSET ADVANCES ONLY WHEN THE REPLY WAS ACTUALLY DELIVERED, which
+    is a correction rather than a refinement. It used to advance after
+    process_message RETURNED - and a send that failed still returned,
+    because the failure happened inside the processed path instead of
+    crashing out of it. So the at-least-once guarantee held for crashes
+    and quietly did not hold for the far more common case: the reply was
+    composed, the send died on a dropped connection, the answer was
+    discarded, and Telegram was told the message had been handled. It was
+    unrecoverable by construction.
+
+    THE COST, STATED RATHER THAN DISCOVERED: not advancing means Telegram
+    redelivers, and the whole chain re-runs for that message - guardrail,
+    classifier, tool, composer, four or five LLM calls, paid again. A
+    duplicate reply is worth more than a silently dropped one, so this is
+    the right trade, but it is a trade and not a free win.
+
+    A FAILURE STOPS THE BATCH. The remaining updates in this response are
+    left unacknowledged too, because advancing past them would skip the
+    one that failed - the offset is a high-water mark, not a set.
+
+    `attempts` bounds the re-run. Without a ceiling, an update that fails
+    every time wedges the bot permanently: the offset never advances, so
+    the same message is redelivered forever and every other reader is
+    stuck behind it.
     """
     params: dict = {"timeout": LONG_POLL_TIMEOUT_SECONDS}
     if offset is not None:
@@ -128,6 +155,7 @@ async def poll_once(client: httpx.AsyncClient, offset: int | None) -> int | None
                     "text_length": len(text),
                 }},
             )
+            attempts[update_id] = attempts.get(update_id, 0) + 1
             try:
                 # Everything Telegram-specific ends at this line;
                 # process_message knows nothing about the transport.
@@ -137,9 +165,43 @@ async def poll_once(client: httpx.AsyncClient, offset: int | None) -> int | None
                     "Telegram message processing failed",
                     extra={"extra_fields": {
                         "chat_id": chat_id, "update_id": update_id,
+                        "attempt": attempts[update_id],
+                        "of": settings.max_update_attempts,
                         "error": str(e), "error_type": type(e).__name__,
                     }},
                 )
+
+                if attempts[update_id] < settings.max_update_attempts:
+                    # Leave the offset where it is so Telegram redelivers
+                    # this update, and stop here rather than processing
+                    # the ones behind it.
+                    return offset
+
+                # Out of attempts. Give up on THIS message so it cannot
+                # block the queue behind it, but record it somewhere a
+                # human can find it - dropping it silently is the exact
+                # failure this whole function is being changed to remove.
+                await push_dead_letter({
+                    "component": "telegram_poller",
+                    "update_id": update_id,
+                    "chat_id": chat_id,
+                    "attempts": attempts[update_id],
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                })
+                sentry_sdk.capture_message(
+                    "Telegram update abandoned after repeated failures",
+                    level="error",
+                )
+                logger.error(
+                    "Telegram update abandoned - dead-lettered",
+                    extra={"extra_fields": {
+                        "chat_id": chat_id, "update_id": update_id,
+                        "attempts": attempts[update_id],
+                    }},
+                )
+
+            attempts.pop(update_id, None)
 
         offset = update_id + 1
 
@@ -182,23 +244,82 @@ async def run_telegram_poller() -> None:
 
     logger.info("Telegram poller starting")
     offset: int | None = None
+    attempts: dict[int, int] = {}
+    consecutive_failures = 0
+    alerted = False
 
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
             while True:
                 try:
-                    offset = await poll_once(client, offset)
-                    # Refreshed after real work, so a wedged poller that
-                    # stops making progress eventually drops the lock and
-                    # lets a healthy one take over.
-                    await acquire_poller_lock(refresh=True)
+                    offset = await poll_once(client, offset, attempts)
+
+                    if consecutive_failures:
+                        logger.info(
+                            "Telegram polling recovered",
+                            extra={"extra_fields": {
+                                "after_failures": consecutive_failures,
+                            }},
+                        )
+                    consecutive_failures = 0
+                    alerted = False
+
                 except Exception as e:
-                    # A network blip must not kill the loop. Backing off
-                    # briefly avoids hammering Telegram while it is unhappy.
+                    # A network blip must not kill the loop.
+                    consecutive_failures += 1
                     logger.error(
                         "Telegram poll cycle failed",
-                        extra={"extra_fields": {"error": str(e), "error_type": type(e).__name__}},
+                        extra={"extra_fields": {
+                            "error": str(e), "error_type": type(e).__name__,
+                            "consecutive_failures": consecutive_failures,
+                        }},
                     )
-                    await asyncio.sleep(5)
+
+                    # A LOG LINE IS NOT AN ALERT. At this level logging
+                    # only produces a Sentry breadcrumb, which nobody sees
+                    # unless something else raises - and during an outage
+                    # nothing else does. Three and a half hours of a dead
+                    # bot passed unnoticed exactly this way.
+                    #
+                    # Fired once per outage, not once per cycle: repeating
+                    # it every few seconds would bury the signal it exists
+                    # to raise.
+                    if consecutive_failures >= settings.poller_failure_alert_threshold \
+                            and not alerted:
+                        sentry_sdk.capture_message(
+                            f"Telegram poller failing: {consecutive_failures} "
+                            f"consecutive cycles ({type(e).__name__})",
+                            level="error",
+                        )
+                        alerted = True
+
+                    # Backoff grows with the outage instead of hammering a
+                    # dead network every 5 seconds, and is jittered so
+                    # several responders do not retry in lockstep.
+                    ceiling = min(2 ** consecutive_failures,
+                                  settings.poller_backoff_max_seconds)
+                    await asyncio.sleep(random.uniform(0, ceiling))
+
+                finally:
+                    # REFRESHED ON EVERY CYCLE, including failed ones.
+                    # This used to sit on the success path, so an outage
+                    # stopped the refresh entirely and the lock expired
+                    # after 60 seconds - leaving a live, network-blocked
+                    # poller holding nothing and a second one free to
+                    # start. Two pollers is the bug the lock exists to
+                    # prevent, and a poller that cannot reach the network
+                    # is still the owner: a replacement would fare no
+                    # better and would double-process once the network
+                    # returned.
+                    try:
+                        await acquire_poller_lock(refresh=True)
+                    except Exception as lock_error:
+                        logger.warning(
+                            "Poller lock refresh failed",
+                            extra={"extra_fields": {
+                                "error": str(lock_error),
+                                "error_type": type(lock_error).__name__,
+                            }},
+                        )
     finally:
         await release_poller_lock()
