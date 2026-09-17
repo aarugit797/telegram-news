@@ -2,6 +2,7 @@ from tavily import AsyncTavilyClient
 
 from app.core.config import settings
 from app.core.llm_client import call_llm
+from app.prompts.responder.fixed_messages import NO_WEB_RESULTS, WEB_SEARCH_LIMIT_REACHED
 from app.prompts.responder.news_qa import NEWS_QA_SYSTEM_PROMPT, NEWS_QA_USER_TEMPLATE
 from app.queues.redis_client import increment_rate_limit
 from app.responder.query_rewriter import rewrite_for_retrieval
@@ -31,11 +32,7 @@ async def run_web_search_tool(
     """
     search_count = await increment_rate_limit(f"{WEB_SEARCH_RATE_KEY_PREFIX}{user_id}")
     if search_count > DAILY_WEB_SEARCH_LIMIT:
-        return (
-            "I've hit my web search limit for today - ask me again tomorrow, "
-            "or ask about something already in my database.",
-            [],
-        )
+        return WEB_SEARCH_LIMIT_REACHED, []
 
     # Same split as news_db: the SEARCH gets the resolved query, the
     # answer is written against the original. A web search on "how do I
@@ -49,7 +46,7 @@ async def run_web_search_tool(
     results = response.get("results", [])
 
     if not results:
-        return "I couldn't find anything current on that.", []
+        return NO_WEB_RESULTS, []
 
     retrieved_text = "\n\n".join(
         f"Source: {r.get('url', '')}\nTitle: {r.get('title', '')}\nDetails: {r.get('content', '')[:800]}"

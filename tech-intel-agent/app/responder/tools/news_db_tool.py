@@ -2,6 +2,7 @@ from app.core.embeddings import get_embedding
 from app.core.llm_client import call_llm
 from app.db.repository_news import search_signals_by_embedding
 from app.db.session_news import get_news_session
+from app.prompts.responder.fixed_messages import NO_MATCHING_SIGNALS
 from app.prompts.responder.news_qa import NEWS_QA_SYSTEM_PROMPT, NEWS_QA_USER_TEMPLATE
 from app.responder.query_rewriter import rewrite_for_retrieval
 
@@ -30,7 +31,7 @@ async def run_news_db_tool(question: str, context: str = "") -> tuple[str, list]
         signals = await search_signals_by_embedding(session, query_embedding, limit=3)
 
     if not signals:
-        return "I don't have anything relevant in my database on that yet.", []
+        return NO_MATCHING_SIGNALS, []
 
     retrieved_text = "\n\n".join(
         f"Source: {s.source}\nTitle: {s.title}\nSummary: {s.summary}\nDetails: {s.full_content[:800]}"

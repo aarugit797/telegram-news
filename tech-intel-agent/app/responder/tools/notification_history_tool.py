@@ -1,6 +1,10 @@
 from app.core.llm_client import call_llm
 from app.db.repository_news import get_most_recent_batch, get_signals_by_ids
 from app.db.session_news import get_news_session
+from app.prompts.responder.fixed_messages import (
+    NO_DIGEST_SENT_YET,
+    NOTIFICATION_DETAILS_MISSING,
+)
 from app.prompts.responder.notification_followup import (
     NOTIFICATION_FOLLOWUP_SYSTEM_PROMPT, NOTIFICATION_FOLLOWUP_USER_TEMPLATE,
 )
@@ -21,12 +25,12 @@ async def run_notification_history_tool(
     async with get_news_session() as session:
         batch = await get_most_recent_batch(session)
         if not batch:
-            return "I haven't sent anything yet, so there's nothing to follow up on.", []
+            return NO_DIGEST_SENT_YET, []
 
         signals = await get_signals_by_ids(session, batch.signal_ids)
 
     if not signals:
-        return "I couldn't find the details from that notification.", []
+        return NOTIFICATION_DETAILS_MISSING, []
 
     # RESTORE THE DIGEST'S ORDER. get_signals_by_ids uses an IN clause,
     # and SQL makes no ordering promise for one - rows come back in

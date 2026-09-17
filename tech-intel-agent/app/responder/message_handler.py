@@ -13,6 +13,16 @@ from app.core.logging_config import get_logger
 from app.core.usage_context import get_totals, start_tracking, stop_tracking
 from app.db.repository_conversation import save_message
 from app.db.session_conversation import get_conversation_session
+from app.core.llm_client import LLMQuotaExhausted
+from app.prompts.responder.fixed_messages import (
+    BLOCKED_COST_LIMITED,
+    BLOCKED_INJECTION,
+    BLOCKED_NOT_WHITELISTED,
+    BLOCKED_OFF_TOPIC,
+    BLOCKED_RATE_LIMITED,
+    CAPACITY_EXHAUSTED,
+    UNEXPECTED_ERROR,
+)
 from app.responder.conversational_agent import run_conversational_agent
 from app.responder.cost_tracker import is_under_cost_limit, record_llm_usage
 from app.responder.guardrail import check_guardrail
@@ -23,18 +33,6 @@ from app.responder.token_budget import get_conversation_context, get_recent_turn
 from app.responder.whitelist import check_whitelist, ensure_user_record
 
 logger = get_logger(__name__)
-
-FIXED_RESPONSES = {
-    "not_whitelisted": "This service is currently invite-only. Contact us to join the waitlist.",
-    "rate_limited": "You've reached today's message limit. Try again tomorrow.",
-    "cost_limited": "You've reached today's usage limit. Try again tomorrow.",
-    "injection_detected": (
-        "I noticed that message was trying to change how I work. "
-        "I'm your tech intelligence agent and I stay focused on tech news and insights."
-    ),
-    "off_topic": "I'm focused on tech news and insights. Ask me about what's happening in AI, engineering, or any article I've sent you.",
-}
-
 
 async def process_message(from_number: str, message_body: str) -> None:
     """
@@ -61,17 +59,17 @@ async def process_message(from_number: str, message_body: str) -> None:
 
     try:
         if not await check_whitelist(from_number):
-            await send_message(from_number, FIXED_RESPONSES["not_whitelisted"])
+            await send_message(from_number, BLOCKED_NOT_WHITELISTED)
             return
 
         user = await ensure_user_record(from_number)
 
         if not await check_and_increment_rate_limit(str(user.id)):
-            await send_message(from_number, FIXED_RESPONSES["rate_limited"])
+            await send_message(from_number, BLOCKED_RATE_LIMITED)
             return
 
         if not await is_under_cost_limit(user.id):
-            await send_message(from_number, FIXED_RESPONSES["cost_limited"])
+            await send_message(from_number, BLOCKED_COST_LIMITED)
             return
 
         async with get_conversation_session() as session:
@@ -97,10 +95,10 @@ async def process_message(from_number: str, message_body: str) -> None:
                     "message_length": len(message_body),
                 }},
             )
-            await send_message(from_number, FIXED_RESPONSES["injection_detected"])
+            await send_message(from_number, BLOCKED_INJECTION)
             return
         if guardrail_result == "OFF_TOPIC":
-            await send_message(from_number, FIXED_RESPONSES["off_topic"])
+            await send_message(from_number, BLOCKED_OFF_TOPIC)
             return
 
         # TWO DIFFERENT VIEWS OF THE HISTORY, on purpose.
@@ -140,6 +138,34 @@ async def process_message(from_number: str, message_body: str) -> None:
                 "user_id": user.id, "direction": "outbound", "message_text": final_reply,
                 "intent_classification": intent, "guardrail_result": guardrail_result,
             })
+
+    except LLMQuotaExhausted:
+        # Every credential is cooling down or spent. The reader is owed
+        # an answer either way - silence is indistinguishable from the
+        # bot being switched off, and they will just send the message
+        # again, which costs another guardrail call the pool also cannot
+        # serve.
+        logger.warning(
+            "Reply abandoned - LLM pool exhausted",
+            extra={"extra_fields": {"user_id": str(user.id) if user else None}},
+        )
+        await send_message(from_number, CAPACITY_EXHAUSTED)
+
+    except Exception as e:
+        # Deliberately broad. Anything reaching here is unplanned, and
+        # the one thing that must not happen is the reader getting
+        # nothing. Re-raised after telling them, so the poller still logs
+        # it with the update id and it stays visible as a real failure
+        # rather than being swallowed into a friendly message.
+        logger.error(
+            "Reply failed mid-chain",
+            extra={"extra_fields": {
+                "user_id": str(user.id) if user else None,
+                "error": str(e), "error_type": type(e).__name__,
+            }},
+        )
+        await send_message(from_number, UNEXPECTED_ERROR)
+        raise
 
     finally:
         # One write for the whole chain - guardrail, intent classifier,
