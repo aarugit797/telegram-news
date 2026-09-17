@@ -80,6 +80,16 @@ EVERY RULE CAME FROM READING REAL OUTPUT, NOT FROM TASTE:
   reader repeats. Split into two rules: use a number when given, never
   supply one otherwise. Zero recurrences across 24 item-samples after.
 
+- HEADINGS COPIED THE SOURCE'S REGISTER. "1.58-bit Barrier compresses
+  ternary LLMs to 1.48 bits per weight using 51% zero weights" is
+  faithful to the abstract and unreadable to anyone outside
+  quantisation. The composer was summarising a paper in the paper's own
+  language, which is the correct instinct for a summary and the wrong
+  one for a digest nobody has opted into reading closely. Hence
+  TRANSLATE, DO NOT SUMMARISE - and the matching narrowing of the
+  NUMBERS rule, since "1.48 bits per weight" is jargon that happens to
+  contain a digit.
+
 STILL OPEN: "lazy DataFrames" survived three separate before/after pairs
 aimed at it, so a term the model considers standard resists the
 one-glance test. The examples also leak - whole AFTER lines have come
@@ -196,6 +206,59 @@ Do not open the clause on a bare abstract verb - "Provides", "Enables", "Offers"
 "Demonstrates", "Eliminates". Lead with the concrete verb of what it actually does: \
 replaces, runs, generates, measures, cuts, ships, adds, merges.
 
+
+TRANSLATE, DO NOT SUMMARISE - THE RULE YOU BREAK MOST OFTEN
+
+A faithful summary of a paper is written in the paper's language, and papers are
+written for specialists. Copying that register produces an item that is completely
+accurate and tells the reader nothing.
+
+THE BAR: a competent engineer who does not work in that specific subfield must
+understand the line. Not simplified, not dumbed down - plain. If a term would send
+them to a search engine BEFORE they know whether they care, it has failed; replace it
+with what it means.
+
+THE TEST, applied to every line: could someone who has never read an ML paper tell
+from this whether they want to read more? If not, rewrite it.
+
+All four of these went out in a real digest.
+
+BEFORE: PANORAMA | grounds generated captions at the pixel level by selecting masks
+                   from a pretrained segmenter
+AFTER:  PANORAMA | makes image captions match exactly which pixels they describe
+
+BEFORE: 1.58-bit Barrier | compresses ternary LLMs to 1.48 bits per weight using 51%
+                           zero weights
+AFTER:  LLM compression | shrinks model weights below the size thought to be the floor
+
+BEFORE: Dreaming Sound Contact | uses generated video and audio to produce motion
+                                 trajectories and force profiles
+AFTER:  Dreaming Sound Contact | turns generated video and sound into robot movement
+                                 data
+
+BEFORE: Tokenizer design | shows that bottom-up search procedures consistently achieve
+                           lower bits-per-byte than top-down pruning
+AFTER:  Tokenizer design | building a tokenizer up beats trimming one down, on
+                           compression
+
+JARGON-FREE DOES NOT MEAN VAGUE. This is the failure on the other side, and it is
+worse: "PANORAMA improves image understanding" is readable and says nothing. Every
+AFTER above still makes a specific claim - which pixels, below which floor, into what
+kind of data. You are swapping the vocabulary, not lowering the information.
+
+WHEN THE NAME ITSELF IS THE JARGON. A real product name always stays: PANORAMA,
+DuckDB, llama.cpp. But a phrase lifted from a paper title is not a name, it is
+terminology - "1.58-bit Barrier" means nothing to anyone outside quantisation work.
+There, prefer the plain subject: "LLM compression", "Tokenizer design".
+
+NUMBERS FOLLOW THE SAME BAR. A number is only scannable if its unit means something
+unaided. "646 languages", "128k context", "eleven services into two" all land. "1.48
+bits per weight" and "lower bits-per-byte" do not - they are jargon that happens to
+contain a digit. Keep the first kind, translate or drop the second.
+
+AT MOST ONE TECHNICAL TERM may survive in a line, and only when it genuinely adds
+precision and the rest of the line makes it inferable. Two is a line written for
+someone who already knows.
 
 ACCURACY - THE RULE THAT OUTRANKS THE OTHERS
 
