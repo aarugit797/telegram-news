@@ -53,15 +53,33 @@ _REFERRING = re.compile(
 )
 
 
+# THE SECOND CLASS OF CONTEXT-DEPENDENT MESSAGE, and the one the pronoun
+# list misses entirely: a bare continuation. "tell me more" contains no
+# pronoun at all, so it slipped the gate, and news_db embedded the
+# literal string "tell me more" - a vector with no subject in it. The
+# tool retrieved whatever sat nearest that, landed back on the same
+# signal, and repeated its previous answer almost word for word.
+#
+# These carry their entire meaning in the turn before them, so they need
+# the rewrite MORE than a pronoun does, not less.
+_CONTINUATION = re.compile(
+    r"^\W*(tell me more|more( please)?|go on|carry on|keep going|continue|"
+    r"elaborate|expand|explain|what else|anything else|and\?)\W*$",
+    re.IGNORECASE,
+)
+
+
 def needs_rewrite(question: str, context: str) -> bool:
     """
     Whether this question is worth spending a rewrite call on.
 
-    Both conditions are required. No context means there is nothing to
-    resolve a pronoun AGAINST, so the rewriter could only guess - and a
-    guess is the outcome this whole step exists to avoid.
+    Context is required either way: with no history there is nothing to
+    resolve AGAINST, so the rewriter could only guess - and a guess is
+    the outcome this whole step exists to avoid.
     """
-    return bool(context.strip()) and bool(_REFERRING.search(question))
+    if not context.strip():
+        return False
+    return bool(_REFERRING.search(question) or _CONTINUATION.match(question.strip()))
 
 
 async def rewrite_for_retrieval(question: str, context: str) -> str:

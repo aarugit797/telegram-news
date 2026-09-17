@@ -87,3 +87,35 @@ def test_relative_that_is_a_known_accepted_over_trigger():
     question unchanged, which is the right side of the trade.
     """
     assert needs_rewrite("any tools that run locally", CONTEXT) is True
+
+
+@pytest.mark.parametrize("question", [
+    "tell me more",
+    "Tell me more.",
+    "go on",
+    "elaborate",
+    "what else",
+    "keep going",
+])
+def test_bare_continuations_trigger_a_rewrite(question):
+    """
+    The class the pronoun list misses entirely. "tell me more" has no
+    pronoun, so it slipped the gate and news_db embedded that literal
+    string - a vector with no subject - which retrieved the same signal
+    again and produced a near-verbatim repeat of the previous answer.
+    These carry all their meaning in the turn before them.
+    """
+    assert needs_rewrite(question, CONTEXT) is True
+
+
+def test_a_continuation_still_needs_context():
+    assert needs_rewrite("tell me more", "") is False
+
+
+def test_more_inside_a_real_question_is_not_a_bare_continuation():
+    """
+    The continuation pattern is anchored, so a question that merely
+    contains "more" is judged on its own merits - this one is
+    self-contained and must not cost a call.
+    """
+    assert needs_rewrite("which database handles more concurrent writes", CONTEXT) is False
