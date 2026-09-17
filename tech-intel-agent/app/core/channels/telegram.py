@@ -1,3 +1,6 @@
+import asyncio
+import random
+
 import httpx
 
 from app.core.channels.base import MessageChannel
@@ -22,6 +25,48 @@ MIN_SECONDS_BETWEEN_MESSAGES_TO_ONE_CHAT = 1.0
 # instruction would otherwise lose the whole message rather than most of
 # it.
 MAX_MESSAGE_CHARS = 4096
+
+# TRANSIENT: the request never reached Telegram, or the response never
+# came back intact. Nothing is known to have happened, so retrying is
+# safe and is very likely to work - these are the shapes a dropped
+# network takes.
+#
+# RemoteProtocolError covers the truncated-response case seen live
+# ("Not enough data to satisfy transfer length header"), and
+# ConnectionResetError arrives as a bare OSError from the socket layer
+# rather than wrapped by httpx, so it is listed separately.
+_TRANSIENT_SEND_ERRORS = (
+    httpx.ConnectError,        # DNS failure, refused connection
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+    httpx.WriteTimeout,
+    httpx.PoolTimeout,
+    httpx.ReadError,
+    httpx.WriteError,
+    httpx.RemoteProtocolError,
+    ConnectionResetError,
+    ConnectionAbortedError,
+)
+
+# NOT retried, deliberately: a Telegram application error is a verdict,
+# not a hiccup. An invalid chat_id, a blocked bot or a malformed
+# parse_mode will fail identically on every attempt, so retrying only
+# delays the failure and burns the reader's time.
+
+
+def _send_backoff_seconds(attempt: int) -> float:
+    """
+    Exponential backoff with full jitter, matching llm_client.
+
+    The jitter matters for the same reason it does there: a digest fans
+    out to every active user, so an outage would otherwise have all of
+    them retrying in lockstep and re-colliding on each wave.
+    """
+    ceiling = min(
+        settings.send_backoff_base_seconds * (2 ** attempt),
+        settings.send_backoff_max_seconds,
+    )
+    return random.uniform(0, ceiling)
 
 
 class TelegramChannel(MessageChannel):
@@ -84,8 +129,47 @@ class TelegramChannel(MessageChannel):
         if rich:
             payload["parse_mode"] = "HTML"
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.post(self._api("sendMessage"), json=payload)
+        # RETRIED, because the cost of losing this is asymmetric. A reply
+        # has already cost four or five LLM calls by the time it reaches
+        # here, and the reader's alternative to a retry is silence. One
+        # real message was lost this way: the connection was reset
+        # mid-response, the reply was discarded, and nothing was ever
+        # delivered.
+        response = None
+        last_error: Exception | None = None
+
+        for attempt in range(settings.send_max_retries + 1):
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    response = await client.post(self._api("sendMessage"), json=payload)
+                last_error = None
+                break
+            except _TRANSIENT_SEND_ERRORS as e:
+                last_error = e
+                if attempt == settings.send_max_retries:
+                    break
+                delay = _send_backoff_seconds(attempt)
+                logger.warning(
+                    "Telegram send failed, retrying",
+                    extra={"extra_fields": {
+                        # chat_id, never the text - same rule as everywhere
+                        # else that touches a message.
+                        "chat_id": channel_user_id,
+                        "attempt": attempt + 1,
+                        "of": settings.send_max_retries,
+                        "sleep_seconds": round(delay, 2),
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    }},
+                )
+                await asyncio.sleep(delay)
+
+        if last_error is not None:
+            # Every attempt failed. Raise rather than returning quietly,
+            # so the caller can decide what it means - for the poller that
+            # means NOT advancing the offset, which is what makes Telegram
+            # redeliver instead of the message vanishing.
+            raise last_error
 
         payload = response.json()
         if not payload.get("ok"):

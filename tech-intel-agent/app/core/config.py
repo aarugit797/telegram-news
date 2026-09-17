@@ -147,6 +147,29 @@ class Settings(BaseSettings):
     # Backoff attempts for TRANSIENT failures (429/503). Deliberately
     # separate from call_llm's max_retries, which covers malformed JSON -
     # a different failure class that should not share a budget.
+    # ---- outbound send retries -------------------------------------------
+    # A reply costs four or five LLM calls to produce. Losing it to a
+    # dropped TCP connection throws all of that away and leaves the reader
+    # with silence, so the send gets the same treatment the LLM calls get.
+    send_max_retries: int = 3
+    send_backoff_base_seconds: float = 0.5
+    send_backoff_max_seconds: float = 8.0
+
+    # ---- poller health ----------------------------------------------------
+    # Consecutive failed poll cycles before this stops being a blip and
+    # starts being an outage worth waking someone for. At roughly one
+    # cycle per 30s plus backoff, 5 is a couple of minutes of a dead bot -
+    # short enough to matter, long enough that a single DNS hiccup stays
+    # quiet.
+    poller_failure_alert_threshold: int = 5
+    poller_backoff_max_seconds: float = 60.0
+
+    # How many times ONE update may be retried before it is dead-lettered
+    # and skipped. Without a ceiling, an update that always fails wedges
+    # the bot forever: the offset never advances, so Telegram redelivers
+    # the same message and every other reader is blocked behind it.
+    max_update_attempts: int = 3
+
     llm_max_transient_retries: int = 4
     llm_backoff_base_seconds: float = 1.0
     llm_backoff_max_seconds: float = 32.0
