@@ -1,3 +1,6 @@
+# Architectue Diagram
+![Telegram Tech Intelligence Bot Architecture](./architecture.png)
+
 # Tech Intelligence Agent
 
 **Five tech sources, twice a day, five items, on Telegram — and you can ask it questions.**
