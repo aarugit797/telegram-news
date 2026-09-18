@@ -56,9 +56,23 @@ async def run_notification_history_tool(
     # 2000 characters of stored content rather than 800: install steps,
     # the most common follow-up, sit below the badges and feature list
     # that fill the first 800 of a README.
+    # THE THIN ONES ARE LABELLED. A signal whose page 403'd or rendered
+    # client-side has a real summary and no article behind it, and the
+    # model cannot tell the difference by looking - it sees a short
+    # Details field and fills the gap. One reply ran out of material
+    # mid-sentence exactly that way. Saying so in the input is what lets
+    # the answer say so too.
+    def _details(signal) -> str:
+        if getattr(signal, "fetch_status", "ok") == "ok":
+            return f"Details: {signal.full_content[:2000]}"
+        return (
+            "Details: NOT AVAILABLE - the page could not be read "
+            f"({getattr(signal, 'fetch_status', 'unknown')}). Only the summary "
+            "above is known about this item."
+        )
+
     signals_text = "\n\n".join(
-        f"Item {i}\nTitle: {s.title}\nLink: {s.url}\nSummary: {s.summary}\n"
-        f"Details: {s.full_content[:2000]}"
+        f"Item {i}\nTitle: {s.title}\nLink: {s.url}\nSummary: {s.summary}\n{_details(s)}"
         for i, s in enumerate(signals, start=1)
     )
 

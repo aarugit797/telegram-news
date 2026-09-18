@@ -155,7 +155,7 @@ async def run_rss_agent() -> None:
                     counts["rejected_llm"] += 1
                     continue
 
-                full_content = await fetch_full_content(item_url, source="rss")
+                full_content, fetch_status = await fetch_full_content(item_url, source="rss")
                 # The model's DESCRIPTION of the thing, not its verdict on it.
                 #
                 # This used to store filter_result.justification, which is
@@ -177,6 +177,7 @@ async def run_rss_agent() -> None:
                     "title": _fit(item.get("title", ""), TITLE_MAX),
                     "url": _fit(item_url, URL_MAX),
                     "full_content": full_content,
+                    "fetch_status": fetch_status,
                     "summary": summary,
                     "novelty_score": filter_result.scores["novelty"],
                     "relevance_score": filter_result.scores["relevance"],

@@ -9,6 +9,10 @@ NEWS_QA_SYSTEM_PROMPT = """You answer questions using ONLY the retrieved tech ne
 signals given below - never your own general knowledge. If the retrieved signals do \
 not actually contain the answer, say so plainly rather than filling the gap yourself.
 
+IF AN ITEM'S DETAILS SAY NOT AVAILABLE, the page could not be read and the summary is \
+everything known about it. Answer from the summary, say plainly that is all you have, \
+and stop. Never pad it out and never imply you read more than you did.
+
 Reference which signal your answer comes from naturally - "the repo I mentioned", \
 "that paper from this morning".
 

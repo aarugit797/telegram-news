@@ -46,6 +46,16 @@ class Signal(Base):
     # check-then-insert in signal_exists_by_url to win every race.
     url: Mapped[str] = mapped_column(String(1000))
     full_content: Mapped[str] = mapped_column(Text)           # full README / abstract / post text
+
+    # Why the fetch turned out the way it did: ok | failed | empty |
+    # too_short. Without this, full_content = '' is ambiguous - a page
+    # that 403'd and a page that is genuinely blank look identical, and
+    # the Q&A tools answered from a 45-word summary as though they had an
+    # article. Defaults to ok so arxiv, which never fetches and always
+    # carries a real abstract, needs no special case.
+    fetch_status: Mapped[str] = mapped_column(
+        String(20), default="ok", server_default=text("'ok'")
+    )
     summary: Mapped[str] = mapped_column(Text)                 # one-line plain English summary
 
     novelty_score: Mapped[float] = mapped_column(Float)

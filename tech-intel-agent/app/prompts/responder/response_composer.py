@@ -10,6 +10,15 @@ answer rather than shortening it - it failed live with "empty response
 from Groq". The ceiling is now a safety limit, and the prompt is what
 actually controls length.
 
+1024 WAS STILL TOO TIGHT, and it took a second failure to show it.
+Replies began stopping mid-clause - "The repository also", "The stored
+content has" - while the logs reported 41 output tokens against a
+ceiling of 1024, which looks nothing like a limit being hit. The gap was
+reasoning: it is billed against max_output_tokens and reported
+separately, so the visible count stayed small while the budget was gone.
+llm_client now records reasoning_tokens and finish_reason and warns on
+MAX_TOKENS, and this ceiling is 4096 - the same default the tools use.
+
 THIS IS THE LAST GATE ON VOICE. Every reply passes through here
 regardless of which tool wrote the draft, so it is the one place that
 can strip an "Absolutely!" a tool slipped through. It imports the same

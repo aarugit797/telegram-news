@@ -24,7 +24,7 @@ async def run_smalltalk_tool(message: str, context: str = "") -> str:
         #
         # Length is the PROMPT's job (it already asks for 1-3 sentences),
         # and this is a safety ceiling rather than a style control.
-        max_tokens=1024,
+        max_tokens=4096,
         # Reserved lane - a user is waiting on this reply.
         lane="responder",
     )

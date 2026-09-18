@@ -173,7 +173,7 @@ async def run_hackernews_agent() -> None:
                     counts[key] += 1
                     continue
 
-                full_content = await fetch_full_content(story_url, source="hackernews")
+                full_content, fetch_status = await fetch_full_content(story_url, source="hackernews")
                 # The model's DESCRIPTION of the thing, not its verdict on it.
                 #
                 # This used to store filter_result.justification, which is
@@ -195,6 +195,7 @@ async def run_hackernews_agent() -> None:
                     "title": _fit(story.get("title", ""), TITLE_MAX),
                     "url": _fit(story_url, URL_MAX),
                     "full_content": full_content,
+                    "fetch_status": fetch_status,
                     "summary": summary,
                     "novelty_score": filter_result.scores["novelty"],
                     "relevance_score": filter_result.scores["relevance"],

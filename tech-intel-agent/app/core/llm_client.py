@@ -172,6 +172,18 @@ class LLMResult:
     cache_creation_input_tokens: int = 0
     cache_read_input_tokens: int = 0
 
+    # REASONING TOKENS ARE BILLED AGAINST max_tokens AND NEVER RETURNED,
+    # so a model can spend its whole budget thinking and hand back a
+    # sentence that stops mid-clause. output_tokens counts only what came
+    # back, which made that failure invisible: a reply truncated at
+    # "The repository also" logged 41 output tokens against a ceiling of
+    # 1024 and looked nothing like a limit being hit.
+    #
+    # finish_reason is the direct answer - MAX_TOKENS says the model was
+    # cut off rather than finished.
+    reasoning_tokens: int = 0
+    finish_reason: str = ""
+
 
 class LLMProvider(ABC):
     """
@@ -444,10 +456,17 @@ class GeminiProvider(LLMProvider):
         # Gemini's usage counters are named differently from Anthropic's.
         # This mapping is the only place in the system that knows that.
         usage = response.usage_metadata
+        candidates = getattr(response, "candidates", None) or []
+        finish = getattr(candidates[0], "finish_reason", "") if candidates else ""
         return LLMResult(
             content=content,
             input_tokens=getattr(usage, "prompt_token_count", 0) or 0,
             output_tokens=getattr(usage, "candidates_token_count", 0) or 0,
+            # Not folded into output_tokens: that field is what came back,
+            # and conflating the two would hide exactly the gap that
+            # matters when an answer is truncated.
+            reasoning_tokens=getattr(usage, "thoughts_token_count", 0) or 0,
+            finish_reason=str(finish or ""),
             provider=self.name,
             model=model,
         )
@@ -743,7 +762,11 @@ async def call_llm(
                 #
                 # No-op unless a tracking context is active, so the
                 # pipeline's agents are unaffected.
-                record_call(result.input_tokens + result.output_tokens)
+                # Reasoning is billed, so it counts against quota even
+                # though the reader never sees it.
+                record_call(
+                    result.input_tokens + result.output_tokens + result.reasoning_tokens
+                )
 
                 logger.info(
                     "LLM call served",
@@ -756,9 +779,25 @@ async def call_llm(
                         "model": resolved_model,
                         "input_tokens": result.input_tokens,
                         "output_tokens": result.output_tokens,
+                        "reasoning_tokens": result.reasoning_tokens,
+                        "finish_reason": result.finish_reason,
                         "rotations": rotations,
                     }},
                 )
+                if "MAX_TOKENS" in result.finish_reason.upper():
+                    # The reply the reader gets will stop mid-sentence.
+                    # Raising max_tokens is the fix; the prompt, not the
+                    # ceiling, is what should be controlling length.
+                    logger.warning(
+                        "LLM response truncated by max_tokens",
+                        extra={"extra_fields": {
+                            "trace_name": trace_name,
+                            "max_tokens": max_tokens,
+                            "output_tokens": result.output_tokens,
+                            "reasoning_tokens": result.reasoning_tokens,
+                        }},
+                    )
+
                 run.end(
                     outputs={
                         "content": result.content,

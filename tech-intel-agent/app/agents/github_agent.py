@@ -217,7 +217,7 @@ async def run_github_agent() -> None:
                     counts[key] += 1
                     continue
 
-                full_content = await fetch_full_content(repo_url, source="github")
+                full_content, fetch_status = await fetch_full_content(repo_url, source="github")
 
                 # NOTE - using the LLM's scoring justification as the
                 # stored summary for now, since it already names what
@@ -248,6 +248,7 @@ async def run_github_agent() -> None:
                     "title": _fit(repo.get("name", ""), TITLE_MAX),
                     "url": _fit(repo_url, URL_MAX),
                     "full_content": full_content,
+                    "fetch_status": fetch_status,
                     "summary": summary,
                     "novelty_score": filter_result.scores["novelty"],
                     "relevance_score": filter_result.scores["relevance"],

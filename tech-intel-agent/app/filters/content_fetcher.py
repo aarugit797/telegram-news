@@ -24,7 +24,39 @@ def _github_headers() -> dict:
     return headers
 
 
-async def fetch_full_content(url: str, source: str) -> str:
+# WHAT COUNTS AS A REAL FETCH.
+#
+# 200 characters is not a guess at article length - it is below any
+# article and above what a failure page produces. Two live examples set
+# it: a Cloudflare challenge extracted to 41 characters ("Enable
+# JavaScript and cookies to continue") and a JavaScript-rendered blog to
+# 4 ("Qwen"). Both were stored as successes.
+MIN_USEFUL_CONTENT_CHARS = 200
+
+# fetch_status values, stored on the signal:
+#
+#   ok         - real content, long enough to answer a question from
+#   failed     - the fetch raised: non-200, refused by the SSRF guard,
+#                timeout, connection error
+#   empty      - fetched cleanly, extracted nothing at all
+#   too_short  - fetched cleanly, extracted less than MIN_USEFUL_CONTENT
+#                CHARS. Almost always a bot challenge or a page whose
+#                text is rendered client-side.
+FETCH_OK = "ok"
+FETCH_FAILED = "failed"
+FETCH_EMPTY = "empty"
+FETCH_TOO_SHORT = "too_short"
+
+
+def _classify(content: str) -> str:
+    if not content.strip():
+        return FETCH_EMPTY
+    if len(content) < MIN_USEFUL_CONTENT_CHARS:
+        return FETCH_TOO_SHORT
+    return FETCH_OK
+
+
+async def fetch_full_content(url: str, source: str) -> tuple[str, str]:
     """
     Called by an agent ONLY after a signal has already passed
     hybrid_filter.py - never before, since most candidates get
@@ -51,28 +83,57 @@ async def fetch_full_content(url: str, source: str) -> str:
     Unlike GitHub, there's no "rest" left to fetch afterward, so
     arxiv_agent.py simply carries that abstract straight through to
     the News DB without ever calling this function.
+
+    RETURNS (content, fetch_status). It used to return "" for every kind
+    of failure, which meant nothing downstream could tell a page that was
+    genuinely empty from one that 403'd - and the Q&A tool answered from
+    a 45-word summary as though it had an article, running out of
+    material mid-sentence. Swallowing the exception is still right; one
+    bad link must not end an agent run. Discarding the REASON was not.
+
+    SOURCES KNOWN TO FAIL THIS WAY, both seen live and neither fixable by
+    parsing harder:
+
+      openai.com  - 403 with a bot challenge. A browser User-Agent does
+                    not help; it is a real challenge, not UA sniffing.
+      qwen.ai     - 200 with 94KB of HTML, 53 script tags, and 4
+                    characters of text. The article is rendered
+                    client-side, so there is nothing in the HTML to
+                    extract. A headless browser would fix it and is far
+                    too large a dependency for a handful of sources.
     """
-    if source == "github":
-        try:
-            return await _fetch_github_readme(url)
-        except Exception as e:
-            logger.warning(
-                f"Content fetch failed for source={source}",
-                extra={"extra_fields": {"url": url, "error": str(e)}},
-            )
-            return ""
+    fetcher = _fetch_github_readme if source == "github" else _fetch_and_extract_text
 
     try:
-        return await _fetch_and_extract_text(url)
+        content = await fetcher(url)
     except Exception as e:
-        # A fetch failure here shouldn't crash the whole agent run -
-        # the signal still gets stored, just with empty full_content,
-        # which the agent's caller can decide how to handle.
+        # A fetch failure here shouldn't crash the whole agent run - the
+        # signal still gets stored, and the status records why it is thin
+        # so the Q&A tools can say so instead of padding.
         logger.warning(
-            f"Content fetch failed for source={source}",
-            extra={"extra_fields": {"url": url, "error": str(e)}},
+            "Content fetch failed",
+            extra={"extra_fields": {
+                "source": source, "url": url,
+                "error": str(e), "error_type": type(e).__name__,
+                "fetch_status": FETCH_FAILED,
+            }},
         )
-        return ""
+        return "", FETCH_FAILED
+
+    status = _classify(content)
+    if status != FETCH_OK:
+        # WARNING, not INFO, precisely because this used to be invisible.
+        # A 200 that extracts nothing raises no exception and logged
+        # nothing at all - the quieter half of this bug.
+        logger.warning(
+            "Content fetch produced too little to use",
+            extra={"extra_fields": {
+                "source": source, "url": url,
+                "chars": len(content), "fetch_status": status,
+            }},
+        )
+
+    return content, status
 
 
 async def _fetch_github_readme(repo_url: str) -> str:

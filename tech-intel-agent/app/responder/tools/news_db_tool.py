@@ -34,7 +34,13 @@ async def run_news_db_tool(question: str, context: str = "") -> tuple[str, list]
         return NO_MATCHING_SIGNALS, []
 
     retrieved_text = "\n\n".join(
-        f"Source: {s.source}\nTitle: {s.title}\nSummary: {s.summary}\nDetails: {s.full_content[:800]}"
+        f"Source: {s.source}\nTitle: {s.title}\nSummary: {s.summary}\n"
+        + (
+            f"Details: {s.full_content[:800]}"
+            if getattr(s, "fetch_status", "ok") == "ok"
+            else "Details: NOT AVAILABLE - the page could not be read. Only the "
+                 "summary above is known about this item."
+        )
         for s in signals
     )
 
