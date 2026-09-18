@@ -1,37 +1,35 @@
-# Tech Intelligence Agent
+# tech-intel-agent
 
-A real-time tech intelligence agent that monitors GitHub, HackerNews,
-arXiv, AI lab blogs, and tech newsletters, filters for genuinely
-important signals using a hybrid rules+LLM filter, and delivers
-natural-sounding WhatsApp notifications. Users can reply and ask
-follow-up questions, answered strictly from verified source content
-via RAG - never hallucinated.
+The application lives here. **See the [README at the repository root](../README.md)**
+for what the product is, how it decides what to send, the architecture, and how to run
+it.
 
-## Status
-Under active development. See project structure below for what's
-built vs stubbed.
+This file used to carry its own copy of that description and drifted badly out of date —
+it still described WhatsApp, Twilio and Claude long after the product moved to Telegram,
+Gemini and Groq. One README, at the root, is what GitHub renders and the only one worth
+keeping current.
 
-## Architecture
-Two independent async processes sharing a Postgres (News DB +
-Conversation DB) and Redis data layer:
+## Layout
 
-- **Process One - Intelligence Pipeline** (`app/pipeline_main.py`):
-  5 source agents -> hybrid filter -> News DB -> batching agent ->
-  WhatsApp notification.
-- **Process Two - WhatsApp Responder** (`app/responder/main.py`):
-  Twilio webhook -> guardrail -> intent classifier -> LangGraph
-  agent (4 tools) -> response composer -> reply.
-
-## Local development
 ```
-docker compose up -d
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env   # then fill in real values
+app/
+  agents/      one per source: github, hackernews, arxiv, blogs, rss, plus the scheduler
+  filters/     the two-stage rules + LLM gate, and the content fetcher with its SSRF guard
+  processor/   dedup, source-capped selection, digest composition
+  sender/      delivery queue worker
+  responder/   the conversation side: guardrail, intent, four tools, composer
+  prompts/     every prompt, separated from the code that calls it
+  db/          models and repositories for the two databases
+  core/        LLM client with credential rotation, embeddings, channels, config
+  queues/      Redis: delivery queue, dead letter, rate limits, LLM budgets
+alembic/       two independent migration chains, news and conversation
+scripts/       reset_local.py
+tests/
 ```
 
-## Tech stack
-FastAPI, SQLAlchemy (async) + PostgreSQL + pgvector, Redis,
-APScheduler, Claude (Anthropic), Voyage AI embeddings, LangGraph +
-LangSmith, Twilio WhatsApp API, Sentry, Alembic. Deployed on AWS
-(EC2 + RDS + ElastiCache).
+## Why prompts live in their own package
+
+They are the product's voice, they change far more often than the code that calls them,
+and their rationale is long. Keeping them beside the call site buried that reasoning in
+functions that are otherwise short. Each prompt module's docstring records which real
+output produced each rule — that history is the reason the rules survive editing.
